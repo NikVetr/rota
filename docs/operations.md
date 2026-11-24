@@ -72,11 +72,11 @@ Copy the printed `batch_dir` into a shell variable called `batch`.
 Inspect `$batch/done/` and the application’s outputs before increasing concurrency.
 `--after "$batch"` on a later submission makes it wait for successful completion.
 
-Queues default to `--schedule_priority 50`. Give two queues the same priority
-when both should make progress. To favor one queue, choose a higher number
-than the other active queues in the dashboard’s Priority column. It gets first
-choice of eligible free slots as running jobs finish. Smaller jobs from another
-queue can still fit where the favored queue cannot.
+For long-running queues, check the dashboard’s Priority column and choose an
+unused `--schedule_priority` (default 50). Give higher numbers to queues whose
+results you want first. They get first choice of eligible slots as jobs finish.
+Reuse a priority only when you want those queues to share workers and make
+progress together.
 
 ## Monitor and recover
 
