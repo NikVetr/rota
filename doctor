@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Check the SSH routes, runtime tools and shared storage used by an inventory."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import json
+import os
+from pathlib import Path
+import secrets
+import shlex
+import subprocess
+import sys
+
+from cluster_config import read_config
+
+
+# Sent on stdin so an empty cluster can be diagnosed before deployment.
+PROBE = r'''
+import json, os, platform, shutil, subprocess, sys, tempfile
+from pathlib import Path
+
+action, root, directory, name, token, mode = sys.argv[1:]
+marker = Path(directory) / name
+checks = {}
+def check(key, ok, detail):
+    checks[key] = {"ok": bool(ok), "detail": str(detail)}
+
+def create_marker():
+    # Readable by workers with different SSH accounts, including across an SMB mount.
+    with marker.open("x") as f:
+        try:
+            f.write(token)
+            f.flush()
+            os.fchmod(f.fileno(), 0o644)
+        except BaseException:
+            marker.unlink()
+            raise
+
+try:
+    if action == "create":
+        create_marker()
+        check("marker", True, "created on coordinator")
+    elif action == "cleanup":
+        if marker.read_text() != token:
+            raise ValueError("marker changed; inspect " + str(marker))
+        marker.unlink()
+        check("cleanup", True, "removed")
+    else:
+        check("python", sys.version_info >= (3, 9), platform.python_version() + " on " + platform.system() + "/" + platform.machine())
+        for tool in ["bash", "ssh", "perl", "shasum"] + (["parallel"] if mode == "shards" else []):
+            location = shutil.which(tool)
+            check(tool, location, location or "missing from noninteractive SSH PATH")
+        if mode == "shards" and checks["parallel"]["ok"]:
+            version = subprocess.run(["parallel", "--version"], capture_output=True, text=True)
+            check("parallel", version.returncode == 0 and "GNU parallel" in version.stdout, version.stdout.splitlines()[0] if version.stdout else "GNU Parallel required")
+        check("shared_root", Path(root).is_dir(), root)
+        if token:
+            try:
+                matches = marker.read_text() == token
+                check("same_storage", matches, "matched coordinator marker" if matches else "different contents at " + str(marker))
+            except OSError as e:
+                check("same_storage", False, e)
+        else:
+            check("same_storage", False, "coordinator marker unavailable")
+        try:
+            with tempfile.NamedTemporaryFile(prefix=".pw-doctor-", dir=directory) as f:
+                f.write(b"ok")
+                f.flush()
+                os.fsync(f.fileno())
+            check("write", True, directory)
+        except OSError as e:
+            check("write", False, e)
+except (OSError, ValueError) as e:
+    check(action, False, e)
+print(json.dumps(checks))
+'''
+
+
+def probe(host, action, root, directory, name, token, mode, timeout):
+    args = [action, root, directory, name, token, mode]
+    # Distinguish an SSH failure from a missing or unusable remote Python.
+    command = "printf 'PW-SSH-OK\\n'; exec python3 - " + shlex.join(args)
+    try:
+        run = subprocess.run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectionAttempts=1",
+                              "-o", f"ConnectTimeout={timeout}", host, command],
+                             input=PROBE, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        reached = isinstance(error, subprocess.TimeoutExpired) and b"PW-SSH-OK" in (error.stdout or b"")
+        return {"probe" if reached else "ssh": {"ok": False, "detail": f"{action}: {type(error).__name__}: {host}"}}
+    lines = run.stdout.splitlines()
+    if "PW-SSH-OK" not in lines:
+        return {"ssh": {"ok": False, "detail": run.stderr.strip() or f"connection exited {run.returncode}"}}
+    checks = {"ssh": {"ok": True, "detail": host}}
+    try:
+        if run.returncode:
+            raise ValueError(run.stderr.strip() or f"python3 exited {run.returncode}")
+        checks.update(json.loads(lines[-1]))
+    except (ValueError, IndexError, TypeError) as error:
+        checks["probe"] = {"ok": False, "detail": f"remote python3: {error}"}
+    return checks
+
+
+def diagnose(inventory, directory, shards, timeout):
+    hosts, root = inventory["hosts"], inventory["shared_root"]
+    coordinator = next(h for h in hosts if h["id"] == inventory["coordinator"])
+    name = ".pw-doctor-" + secrets.token_hex(12)
+    token = secrets.token_hex(24)
+    mode = "shards" if shards else "adaptive"
+
+    def run(host, action, value):
+        return probe(host["ssh"], action, root, directory, name, value, mode, timeout)
+
+    created = run(coordinator, "create", token)
+    has_marker = created.get("marker", {}).get("ok", False)
+    try:
+        with ThreadPoolExecutor(max_workers=min(4, len(hosts))) as workers:
+            results = list(workers.map(lambda h: run(h, "inspect", token if has_marker else ""), hosts))
+    finally:
+        cleanup = run(coordinator, "cleanup", token) if has_marker else {}
+    reports = []
+    for host, checks in zip(hosts, results):
+        if host == coordinator:
+            if not has_marker:
+                checks["marker"] = {"ok": False, "detail": next(
+                    (v["detail"] for v in created.values() if not v["ok"]), "creation failed")}
+            if has_marker and not cleanup.get("cleanup", {}).get("ok"):
+                checks["cleanup"] = {"ok": False, "detail": f"inspect {Path(directory) / name} on the coordinator"}
+        reports.append({"id": host["id"], "target": host["ssh"], "required": host["enabled"] or host == coordinator,
+                        "ok": all(c["ok"] for c in checks.values()), "checks": checks})
+    return {"ok": all(h["ok"] or not h["required"] for h in reports), "directory": directory, "hosts": reports}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("inventory", nargs="?", default="cluster.local.json")
+    p.add_argument("--project", help="probe write access in this existing directory under shared_root")
+    p.add_argument("--shards", action="store_true", help="also require GNU Parallel on workers")
+    p.add_argument("--timeout", type=int, default=12, help="seconds per remote invocation (default 12)")
+    p.add_argument("--json", action="store_true", help="emit structured per-host checks")
+    args = p.parse_args()
+    if args.timeout <= 0:
+        p.error("--timeout must be positive")
+    try:
+        inventory = read_config(args.inventory)
+        root = Path(inventory["shared_root"])
+        directory = Path(args.project) if args.project else root
+        if not directory.is_relative_to(root) or ".." in directory.parts:
+            raise ValueError("--project must be an absolute path inside shared_root")
+        report = diagnose(inventory, str(directory), args.shards, args.timeout)
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(error)}))
+        else:
+            print(f"doctor: {error}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(f"Shared directory  {report['directory']}")
+        for host in report["hosts"]:
+            label = "PASS" if host["ok"] else "FAIL" if host["required"] else "WARN (disabled)"
+            print(f"{label:4}  {host['id']}  {host['target']}")
+            for key, check in host["checks"].items():
+                if not check["ok"]:
+                    print(f"      {key}: {check['detail']}")
+    return 0 if report["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

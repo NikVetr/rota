@@ -17,6 +17,7 @@ jobs:
       - name: Render inventory and check shell compatibility
         run: |
           python3 cluster_config.py examples/cluster.json --output-dir "$RUNNER_TEMP/config"
+          python3 -m unittest discover -s tests -p test_doctor.py
           python3 -m unittest discover -s tests -p test_cluster_config.py
           TEST_BASH=/bin/bash python3 -m unittest discover -s tests -p test_shell_compatibility.py
           python3 -m unittest discover -s tests -p test_queue_eta.py

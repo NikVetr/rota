@@ -24,7 +24,9 @@ queue progress, shared storage, and network/block-device activity.
    tools and dashboard use settings generated from the inventory. Job commands,
    inputs and outputs belong to individual project queues. Keep SSH keys in
    your SSH configuration.
-3. Generate the configuration and activate it in this shell:
+3. From the coordinator, run `./doctor cluster.local.json`. It checks each SSH
+   route, runtime tools, writable storage and a marker shared with the coordinator.
+   Then generate the configuration and activate it in this shell:
 
    ```bash
    env_file=$(python3 cluster_config.py cluster.local.json --render)

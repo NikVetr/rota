@@ -16,6 +16,17 @@ allowance in MiB, and an enabled flag. An SSH target can be an alias from
 python3 cluster_config.py cluster.local.json
 ```
 
+Run `./doctor cluster.local.json` from the coordinator before deployment or
+when a worker loses access. It checks noninteractive SSH, Python 3.9+, Bash,
+SSH, Perl and shasum. To distinguish the same shared directory from two locally
+writable copies, it writes one random marker on the coordinator, reads it from
+each host, and creates and removes a tiny write probe on each. It removes the
+coordinator marker on completion. Use `--project /absolute/shared/project`
+to test project permissions, `--shards` to require GNU Parallel, or `--json` for
+per-check results. A failed coordinator or enabled worker makes the command exit
+1. Disabled workers are reported separately. Running from another admin host
+tests that host’s SSH routes.
+
 Rendering writes a versioned environment, a hosts file and a resource table
 under the shared root. Source the environment in each admin shell. After an
 inventory change, render again and source the new path. A running adaptive
