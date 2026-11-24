@@ -1,0 +1,11 @@
+# Local notes
+/AGENTS.md
+/tmp/
+.DS_Store
+.Rhistory
+.vscode/
+__pycache__/
+*.pyc
+cluster.local.json
+.claude/worktrees/
+/AGENTS.override.md

@@ -1,0 +1,9 @@
+{
+  "shared_root": "/srv/cluster",
+  "coordinator": "storage",
+  "hosts": [
+    {"id": "storage", "ssh": "user@storage", "cpu_units": 4, "memory_mib": 8192, "enabled": true},
+    {"id": "worker", "ssh": "user@worker", "cpu_units": 8, "memory_mib": 16384, "enabled": true}
+  ],
+  "shared_io_capacity": 0
+}

@@ -1,0 +1,28 @@
+name: Portable cluster checks
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Render inventory and check shell compatibility
+        run: |
+          python3 cluster_config.py examples/cluster.json --output-dir "$RUNNER_TEMP/config"
+          python3 -m unittest discover -s tests -p test_cluster_config.py
+          TEST_BASH=/bin/bash python3 -m unittest discover -s tests -p test_shell_compatibility.py
+          python3 -m unittest discover -s tests -p test_queue_eta.py
+      - name: Check Linux monitoring
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -p test_linux_monitor.py
+      - name: Run the first-job walkthrough in a temporary local pool
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -p test_fresh_cluster.py
