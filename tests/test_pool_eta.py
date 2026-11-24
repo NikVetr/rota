@@ -101,5 +101,15 @@ class PoolEtaTests(unittest.TestCase):
         result = forecast([host(cpu=1)], {"A":queue(10001), "B":queue(10001)}, [], 1, allocate)
         self.assertEqual(sorted(result.values()), [20001*60, 20002*60])
 
+    def test_shared_io_released_on_one_host_can_start_a_peer_on_another(self):
+        hosts = [host("left", cpu=1), host("right", cpu=1)]
+        queues = {"A": queue(9), "B": queue(1)}
+        queues["A"].profile["host_priorities"] = {"right": "off"}
+        queues["B"].profile["host_priorities"] = {"left": "off"}
+        running = [Slot("left", "A", 60, 100)]
+        cursor = {"50": "A"}
+        self.assertEqual(forecast(hosts, queues, running, 1, allocate, cursor), {"B": 120, "A": 660})
+        self.assertEqual(forecast(hosts, queues, running, 2, allocate, cursor), {"B": 60, "A": 600})
+
     def test_large_backlog_skips_equivalent_waves(self):
         self.assertEqual(forecast([host()], {"A":queue(1_000_001)}, [], 2, allocate), {"A":500001*60})

@@ -40,28 +40,49 @@ class Slot:
 def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity):
     """Find occupied slots that a waiting peer could take on its next turn."""
     totals = Counter(s.queue for s in slots)
+    waiting = {}
+    for q in live:
+        item = queues[q]
+        cap = item.profile["max_workers"]
+        if pending[q] and item.profile["admission"] == "enabled" and not item.depends - completed:
+            if not cap or totals[q] < cap:
+                waiting[q] = item.profile
+    if not waiting:
+        return set()
+    used_io = sum(queues[q].profile["shared_io_units_per_job"] * n for q, n in totals.items())
+    free_io = max(0, io_capacity - used_io)
+    io_waiters = set()
     contested = set()
     for host in hosts:
         h = host["host_id"]
         if not host.get("enabled", True) or not host.get("reachable", True) or host.get("drain_only"):
             continue
         blocked = host.get("blocked_queues", [])
+        cpu = host.get("live_cpu_units", host["cpu_units"])
+        memory = host.get("live_memory_mib", host["memory_mib"])
         levels = {}
-        for q in live:
-            item = queues[q]
-            level = item.profile["host_priorities"].get(h, item.profile["schedule_priority"])
-            if (pending[q] and item.profile["admission"] == "enabled" and not item.depends - completed
-                    and level != "off" and q not in blocked
-                    and item.profile["cpu_units_per_job"] <= host.get("live_cpu_units", host["cpu_units"])
-                    and item.profile["memory_mib_per_job"] <= host.get("live_memory_mib", host["memory_mib"])
-                    and item.profile["shared_io_units_per_job"] <= io_capacity
-                    and (not item.profile["max_workers"] or totals[q] < item.profile["max_workers"])):
+        for q, profile in waiting.items():
+            level = profile["host_priorities"].get(h, profile["schedule_priority"])
+            if (level != "off" and q not in blocked
+                    and profile["cpu_units_per_job"] <= cpu and profile["memory_mib_per_job"] <= memory
+                    and profile["shared_io_units_per_job"] <= io_capacity):
                 levels[q] = level
+                if profile["shared_io_units_per_job"] > free_io:
+                    io_waiters.add((h, q))
         for q, target in targets[h].items():
+            if not target:
+                continue
             priority = queues[q].profile["host_priorities"].get(h, queues[q].profile["schedule_priority"])
-            if target and priority != "off" and any(other != q and (value > priority or
+            if priority != "off" and any(other != q and (value > priority or
                     (value == priority and totals[other] < totals[q])) for other, value in levels.items()):
                 contested.add((h, q))
+    # A refill can consume the I/O that a peer on another host needs.
+    # Let the allocator choose a destination when that reservation ends.
+    if io_waiters:
+        for slot in slots:
+            if queues[slot.queue].profile["shared_io_units_per_job"] and any(
+                    h != slot.host and q != slot.queue for h, q in io_waiters):
+                contested.add((slot.host, slot.queue))
     return contested
 
 
