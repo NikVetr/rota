@@ -21,6 +21,7 @@ SSH_CONNECT_TIMEOUT_SEC=3
 REGISTRY_FILE=""
 WRITE_REGISTRY=1
 DATA_ONLY=0
+ETA_MODE=pool
 PROCESS_SCAN_FILE=""
 ALLOW_NETWORK_ROOT=0
 SELF_TIMEOUT_SEC=0
@@ -39,7 +40,7 @@ usage() {
 Queue progress monitor (snapshot view).
 
 Usage:
-  $0 [--root <path>] [--limit <n>] [--running_window_sec <n>] [--history_window_sec <n>] [--older_limit <n>] [--bar_width <n>] [--max_label_len <n>] [--max_batch_scan <n>] [--cache_file <path>] [--term_cols <n>] [--term_lines <n>] [--scrollable] [--hosts_file <path>] [--hosts "<h1> <h2> ..."] [--registry_file <path>] [--process_scan_file <path>] [--self_timeout_sec <n>] [--data_only] [--no_registry] [--allow_network_root]
+  $0 [--root <path>] [--limit <n>] [--running_window_sec <n>] [--history_window_sec <n>] [--older_limit <n>] [--bar_width <n>] [--max_label_len <n>] [--max_batch_scan <n>] [--cache_file <path>] [--term_cols <n>] [--term_lines <n>] [--scrollable] [--hosts_file <path>] [--hosts "<h1> <h2> ..."] [--registry_file <path>] [--process_scan_file <path>] [--self_timeout_sec <n>] [--eta_mode pool|allocation] [--data_only] [--no_registry] [--allow_network_root]
 
 Defaults:
   --root $ROOT
@@ -80,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --registry_file) REGISTRY_FILE="$2"; shift 2 ;;
     --process_scan_file) PROCESS_SCAN_FILE="$2"; shift 2 ;;
     --self_timeout_sec) SELF_TIMEOUT_SEC="$2"; shift 2 ;;
+    --eta_mode) ETA_MODE="$2"; shift 2 ;;
     --data_only) DATA_ONLY=1; WRITE_REGISTRY=1; shift ;;
     --no_registry) WRITE_REGISTRY=0; shift ;;
     --allow_network_root) ALLOW_NETWORK_ROOT=1; shift ;;
@@ -90,6 +92,11 @@ done
 
 : "${ROOT:?Source the inventory environment or pass --root}"
 
+case "$ETA_MODE" in
+  pool) ;;
+  allocation) WRITE_REGISTRY=0 ;;
+  *) echo "--eta_mode must be pool or allocation" >&2; exit 2 ;;
+esac
 REGISTRY_FILE="${REGISTRY_FILE:-$ROOT/QUEUE_PROGRESS.csv}"
 
 if ! [[ "$LIMIT" =~ ^[0-9]+$ ]] || [ "$LIMIT" -gt 1000 ]; then
@@ -605,6 +612,7 @@ tmp_selected="$(mktemp)"
 tmp_older="$(mktemp)"
 tmp_display="$(mktemp)"
 tmp_failed="$(mktemp)"
+tmp_pool_eta="$(mktemp)"
 REGISTRY_LOCK_DIR="${REGISTRY_FILE}.writer.lock"
 registry_lock_held=0
 registry_stage=""
@@ -617,7 +625,7 @@ cleanup() {
     "$tmp_registry_ranked" "$tmp_registry_selected" \
     "$tmp_discovered_candidates" "$tmp_sorted_candidates" "$tmp_running_tags" \
     "$tmp_running_assigned" "$tmp_worker_slots" "$tmp_host_scan_status" "$tmp_process_scan" \
-    "$tmp_registry" "$tmp_selected" "$tmp_older" "$tmp_display" "$tmp_failed"
+    "$tmp_registry" "$tmp_selected" "$tmp_older" "$tmp_display" "$tmp_failed" "$tmp_pool_eta"
   [ -z "$registry_stage" ] || rm -f "$registry_stage"
   if [ "$registry_lock_held" -eq 1 ]; then
     rm -f "$REGISTRY_LOCK_DIR/owner"
@@ -767,6 +775,11 @@ if [ ! -f "$FAILURE_SCRIPT" ]; then
 elif ! python3 "$FAILURE_SCRIPT" --state_root "${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}" \
     < "$tmp_all_candidates" > "$tmp_failed"; then
   : > "$tmp_failed"
+fi
+# One simulation per snapshot; all consumers keep the same ETA column.
+eta_state_root="${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}"
+if [ "$ETA_MODE" = pool ] && [ -f "$eta_state_root/pool.env" ] && [ -f "$ROOT/adaptive_coordinator.py" ]; then
+  python3 "$SCRIPT_DIR/monitor_pool_eta.py" --root "$ROOT" --state-root "$eta_state_root" > "$tmp_pool_eta" || : > "$tmp_pool_eta"
 fi
 today_ymd="$(format_epoch "$now_epoch" '+%Y%m%d' 2>/dev/null || echo '')"
 
@@ -1171,6 +1184,11 @@ while IFS= read -r batch_dir; do
   fi
 
   eta_sec=-1
+  allocation_eta=""
+  pool_eta=""
+  if [ "$execution_mode" = "adaptive-shared-queue" ] && [ -s "$tmp_pool_eta" ]; then
+    read -r allocation_eta pool_eta < <(awk -F '\t' -v b="$batch_dir" '$1 == b {print $2, $3; exit}' "$tmp_pool_eta") || true
+  fi
   if { [ "$state" = "RUNNING" ] || [ "$state" = "DRAINING" ]; } \
       && [ "$done_jobs" -gt 0 ] && [ "$done_jobs" -lt "$total_jobs" ]; then
     eta_workers="$worker_slots"
@@ -1184,11 +1202,19 @@ while IFS= read -r batch_dir; do
           [ $((total_jobs - finished_jobs)) -le "$eta_workers" ] || eta_workers=0 ;;
       esac
     fi
-    if [ "$eta_workers" != 0 ]; then
+    if [ "$eta_workers" != 0 ] && [ -n "$allocation_eta" ]; then
+      eta_sec="$allocation_eta"
+    elif [ "$eta_workers" != 0 ]; then
       eta_sec="$(python3 "$SCRIPT_DIR/monitor_queue_eta.py" "$batch_dir" "$execution_mode" \
         "$total_jobs" "$finished_jobs" "$eta_workers" "$now_epoch")" || eta_sec=-1
     fi
   fi
+
+  case "$state:${adaptive_hold:-}" in
+    RUNNING:SMB|RUNNING:SMB!|RUNNING:HOST) ;;
+    RUNNING:*|DRAINING:*|PENDING:*)
+      if [ -n "$pool_eta" ]; then eta_sec="$pool_eta"; fi ;;
+  esac
 
   if [ "$state" = "RUNNING" ] || [ "$state" = "PENDING" ] || [ "$state" = "DRAINING" ] \
       || { [ "$state" = "UNKNOWN" ] && [ "$priority" -eq 0 ]; }; then

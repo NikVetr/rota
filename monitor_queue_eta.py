@@ -2,13 +2,16 @@
 """Estimate remaining queue time at its current concurrency on the storage host."""
 
 import argparse
+from collections import defaultdict
+from dataclasses import dataclass
+import json
 import os
 import random
 from pathlib import Path
 from statistics import mean
 from typing import Optional
 
-from scheduler_snapshot import read_env
+from scheduler_snapshot import read_env, reservation_host
 
 
 SAMPLE_SIZE = 128
@@ -27,42 +30,74 @@ def finish_time(residuals: list[float], pending: int, typical: float) -> float:
     return next_finishes[missing - 1]
 
 
-def shared_eta(batch: Path, remaining: int, workers: int, now: float) -> Optional[float]:
-    if remaining <= 0 or workers <= 0:
+@dataclass
+class JobTimes:
+    durations: list[float]
+    by_host: dict[str, list[float]]
+    active: list[str]
+    claimed: int
+    done: int
+
+
+def claim_host(claim: Path, pool_id: str):
+    try:
+        reservation = json.loads((claim / "owner.json").read_text())["reservation_id"]
+        return reservation_host(reservation, pool_id) if isinstance(reservation, str) else None
+    except (OSError, KeyError, ValueError, TypeError):
         return None
+
+
+def sample_jobs(batch: Path, now: float, pool_id: str = "") -> JobTimes:
     done_dir, claims = batch / "done", batch / "claims"
     done = {name[:-5] for name in os.listdir(done_dir)
             if name.startswith("job_") and name.endswith(".done")}
-    # Bound metadata reads on large queues. Sorting makes the sample reproducible
-    # across directory iteration orders without favoring short jobs or early IDs.
     sample = random.Random(0).sample(sorted(done), min(SAMPLE_SIZE, len(done)))
     durations = []
+    by_host = defaultdict(list)
     for job in sample:
+        claim = claims / (job + ".claim")
         try:
             finish = (done_dir / (job + ".done")).stat().st_mtime
-            start = (claims / (job + ".claim")).stat().st_mtime
+            start = claim.stat().st_mtime
         except FileNotFoundError:
             continue
         if start < finish <= now:
             durations.append(finish - start)
-    if not durations:
+            host = claim_host(claim, pool_id) if pool_id else None
+            if host:
+                by_host[host].append(finish - start)
+    claimed = [name for name in os.listdir(claims)
+               if name.startswith("job_") and name.endswith(".claim")]
+    return JobTimes(durations, dict(by_host), [name for name in claimed if name[:-6] not in done],
+                    len(claimed), len(done))
+
+
+def residual(durations, age, tail):
+    longer = [duration - age for duration in durations if duration > age]
+    return mean(longer) if longer else (None if tail else mean(durations))
+
+
+def current_eta(batch, remaining, workers, now, times):
+    if remaining <= 0 or workers <= 0 or not times.durations:
         return None
-    typical = mean(durations)
+    typical = mean(times.durations)
     slots = min(remaining, workers)
-    active = [name for name in os.listdir(claims) if name.startswith("job_")
-              and name.endswith(".claim") and name[:-6] not in done]
-    # Failed claims can remain on disk, and status can lag a new assignment.
-    # Only credit time already spent when the two sources agree on occupancy.
-    if len(active) != slots:
+    if len(times.active) != slots:
         return typical * ((remaining + slots - 1) // slots)
     residuals = []
-    for name in active:
-        age = max(0, now - (claims / name).stat().st_mtime)
-        longer = [duration - age for duration in durations if duration > age]
-        if not longer and remaining == slots:
-            return None  # A final job has already outlasted the entire sample.
-        residuals.append(mean(longer) if longer else typical)
+    for name in times.active:
+        age = max(0, now - (batch / "claims" / name).stat().st_mtime)
+        left = residual(times.durations, age, remaining == slots)
+        if left is None:
+            return None
+        residuals.append(left)
     return finish_time(residuals, remaining - slots, typical)
+
+
+def shared_eta(batch: Path, remaining: int, workers: int, now: float) -> Optional[float]:
+    if remaining <= 0 or workers <= 0:
+        return None
+    return current_eta(batch, remaining, workers, now, sample_jobs(batch, now))
 
 
 def shard_eta(batch: Path, total: int, now: float) -> Optional[float]:

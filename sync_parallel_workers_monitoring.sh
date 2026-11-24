@@ -39,6 +39,7 @@ MONITOR_FILES=(
   start_tmux_monitoring.sh
   start_tmux_monitoring_remote.sh
   monitor_queue_eta.py
+  monitor_pool_eta.py
   monitor_queue_progress.sh
   monitor_queue_failures.py
   monitor_queue_pane.sh
@@ -103,7 +104,7 @@ shell_files=(
   monitor_mount_status.sh
   monitor_cluster_io.sh
 )
-files=(monitor_queue_eta.py "${shell_files[@]}" monitor_queue_failures.py monitor_cluster_io_rates.py monitor_storage.py monitor_cpu.py monitor_linux.py monitor_mac.py monitor_sample.py monitor_snapshot.py scheduler_snapshot.py monitor_htoprc)
+files=(monitor_queue_eta.py monitor_pool_eta.py "${shell_files[@]}" monitor_queue_failures.py monitor_cluster_io_rates.py monitor_storage.py monitor_cpu.py monitor_linux.py monitor_mac.py monitor_sample.py monitor_snapshot.py scheduler_snapshot.py monitor_htoprc)
 
 file_mode() {
   local mode
@@ -139,7 +140,7 @@ fi
 for file in "${shell_files[@]}"; do
   bash -n "$stage/$file"
 done
-python3 -m py_compile "$stage/monitor_queue_eta.py" "$stage/monitor_queue_failures.py" "$stage/monitor_cluster_io_rates.py" "$stage/monitor_storage.py" "$stage/monitor_cpu.py" "$stage/monitor_linux.py" "$stage/monitor_mac.py" "$stage/monitor_sample.py" "$stage/monitor_snapshot.py" "$stage/scheduler_snapshot.py"
+python3 -m py_compile "$stage/monitor_pool_eta.py" "$stage/monitor_queue_eta.py" "$stage/monitor_queue_failures.py" "$stage/monitor_cluster_io_rates.py" "$stage/monitor_storage.py" "$stage/monitor_cpu.py" "$stage/monitor_linux.py" "$stage/monitor_mac.py" "$stage/monitor_sample.py" "$stage/monitor_snapshot.py" "$stage/scheduler_snapshot.py"
 
 for file in "${files[@]}"; do
   mode=$(expected_mode "$file")

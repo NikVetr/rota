@@ -104,9 +104,8 @@ def diagnose(inventory, directory, shards, timeout):
     coordinator = next(h for h in hosts if h["id"] == inventory["coordinator"])
     name = ".pw-doctor-" + secrets.token_hex(12)
     token = secrets.token_hex(24)
-    mode = "shards" if shards else "adaptive"
-
     def run(host, action, value):
+        mode = "shards" if shards and host["enabled"] else "adaptive"
         return probe(host["ssh"], action, root, directory, name, value, mode, timeout)
 
     created = run(coordinator, "create", token)

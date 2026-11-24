@@ -21,6 +21,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_cluster_config.py
           TEST_BASH=/bin/bash python3 -m unittest discover -s tests -p test_shell_compatibility.py
           python3 -m unittest discover -s tests -p test_queue_eta.py
+          python3 -m unittest discover -s tests -p test_pool_eta.py
       - name: Check Linux monitoring
         if: runner.os == 'Linux'
         run: python3 -m unittest discover -s tests -p test_linux_monitor.py
