@@ -46,6 +46,8 @@ or `disk` when automatic coordinator device selection is unsuitable.
 
 ## Submit your own queue
 
+![A submission lists jobs and resources. The coordinator assigns targets using host capacity reports. Host agents start workers, which claim jobs and record results on shared storage.](figures/scheduler-flow.svg)
+
 Use the [first-job walkthrough](../examples/first-job/README.md) as a template.
 Create `queues/jobs.txt` in a project directory on the shared drive. Each line
 contains a unique ID and a shell command. The worker appends
@@ -70,6 +72,12 @@ Copy the printed `batch_dir` into a shell variable called `batch`.
 Inspect `$batch/done/` and the application’s outputs before increasing concurrency.
 `--after "$batch"` on a later submission makes it wait for successful completion.
 
+Queues default to `--schedule_priority 50`. Give two queues the same priority
+when both should make progress. To favor one queue, choose a higher number
+than the other active queues in the dashboard’s Priority column. It gets first
+choice of eligible free slots as running jobs finish. Smaller jobs from another
+queue can still fit where the favored queue cannot.
+
 ## Monitor and recover
 
 The direct dashboard samples the hosts over SSH. On a Linux dashboard host, the
@@ -77,8 +85,48 @@ optional systemd user service instead collects shared snapshots for the CLI and
 Agent Bar. Install it from the checkout with the rendered environment sourced.
 Check it with `systemctl --user status parallel-workers-collector` or
 `journalctl --user -u parallel-workers-collector`. Rerun the installer after
-changing inventories. Queue ETA uses measured job durations and current worker
-occupancy. Long final jobs and differing job durations can still affect it.
+changing inventories.
+
+### Completion estimates
+
+The adaptive queue ETA answers “When would this queue finish with the pool we
+have now?” It measures the time between each successful job’s claim and its
+completion, then uses the scheduler’s allocator to project which queue can use
+each slot as jobs finish. A running job stays on its host. Queue and host
+priorities, worker caps, available CPU and RAM, shared I/O limits, host holds
+and queue dependencies constrain new starts.
+
+![Two equal-priority queues share two workers. A finishes in 10 minutes. B then uses both workers and finishes at minute 35, compared with minute 60 on one worker.](figures/pool-eta.svg)
+
+In this example, B has 50 one-minute jobs left when A finishes. Two workers
+finish those jobs in 25 minutes. [Play or step through the timeline](pool-eta.html)
+from a local checkout.
+
+The forecast samples up to 128 successful jobs per queue. A host with at least
+three sampled completions uses its own mean for that workload. Other hosts use
+the queue mean. For a running job the monitor also considers how long it has
+already run. Queued time contributes no work. New submissions, future host
+changes, startup delays and changes in job mix can move the estimate.
+An untimed queue can occupy capacity, and a queue with insufficient timing or
+no projected finish shows a blank ETA. If the whole pool snapshot is
+unavailable, running rows fall back to the current-allocation estimate.
+
+The shared monitor snapshot carries the pool estimate by default. To compare
+both estimates in seconds on the coordinator, run:
+
+```bash
+python3 "$PARALLEL_WORKERS_ROOT/monitor_pool_eta.py" --root "$PARALLEL_WORKERS_ROOT" --json
+```
+
+`pool_eta_sec` includes capacity released by other queues.
+`allocation_eta_sec` keeps each queue at its current worker count.
+For a one-off monitor view of the latter, use `monitor_queue_progress.sh
+--eta_mode allocation`. Fixed-worker queues and host-local shards retain
+their own estimates.
+
+### Interruptions and recovery
+
+![After contact is lost, the scheduler holds the reservation. Verified completion preserves the result. Verified loss can lead to an audited retry.](figures/worker-recovery.svg)
 
 To pause admissions for one queue, run `"$scheduler" pause --batch_dir "$batch"`.
 Its running jobs finish. Resume with the same command using `resume`.

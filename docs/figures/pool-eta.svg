@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 285" role="img" aria-labelledby="title desc">
+  <title id="title">How a released worker changes the forecast</title>
+  <desc id="desc">Worker one runs queue A for ten minutes, then queue B until minute 35. Worker two runs queue B from minute zero through 35. With a fixed allocation B would finish at minute 60.</desc>
+  <defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#455d6c"/></marker></defs>
+  <rect width="960" height="285" rx="14" fill="#fbfcfa"/>
+  <g font-family="DejaVu Sans, Arial, sans-serif">
+    <text x="28" y="39" text-anchor="start" font-size="26" font-weight="700" fill="#19334a">Two queues share two workers</text>
+    <text x="28" y="67" text-anchor="start" font-size="16" font-weight="400" fill="#455d6c">Equal priority  ·  One minute per job  ·  A has 10 jobs left, B has 60</text>
+    <text x="28" y="121" text-anchor="start" font-size="16" font-weight="700" fill="#19334a">Worker 1</text>
+    <text x="28" y="173" text-anchor="start" font-size="16" font-weight="700" fill="#19334a">Worker 2</text>
+    <path d="M 138.0 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 266.5 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 395.0 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 523.5 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 587.75 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 716.25 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <path d="M 909.0 88 V 196" stroke="#c6d2d7" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <rect x="138.0" y="94" width="126.5" height="39" rx="5" fill="#a85812" stroke="none"/>
+    <text x="202.25" y="119" text-anchor="middle" font-size="16" font-weight="700" fill="white">Queue A</text>
+    <rect x="266.5" y="94" width="319.25" height="39" rx="5" fill="#00796b" stroke="none"/>
+    <text x="427.125" y="119" text-anchor="middle" font-size="16" font-weight="700" fill="white">Queue B</text>
+    <rect x="138.0" y="146" width="447.75" height="39" rx="5" fill="#00796b" stroke="none"/>
+    <text x="362.875" y="171" text-anchor="middle" font-size="16" font-weight="700" fill="white">Queue B</text>
+    <path d="M 593.75 166 H 909.0" stroke="#455d6c" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="748.375" y="155" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">B if its allocation stayed fixed</text>
+    <text x="138.0" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">0</text>
+    <text x="266.5" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">10</text>
+    <text x="395.0" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">20</text>
+    <text x="587.75" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">35</text>
+    <text x="716.25" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">45</text>
+    <text x="909.0" y="215" text-anchor="middle" font-size="14" font-weight="400" fill="#455d6c">60 min</text>
+    <text x="28" y="260" text-anchor="start" font-size="20" font-weight="700" fill="#a85812">10 min</text>
+    <text x="111" y="260" text-anchor="start" font-size="16" font-weight="400" fill="#19334a">A finishes. B has 50 jobs left.</text>
+    <text x="518" y="260" text-anchor="start" font-size="20" font-weight="700" fill="#00796b">35 min</text>
+    <text x="605" y="260" text-anchor="start" font-size="16" font-weight="400" fill="#19334a">B finishes with both workers.</text>
+  </g>
+</svg>

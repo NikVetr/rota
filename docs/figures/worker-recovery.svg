@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 287" role="img" aria-labelledby="title desc">
+  <title id="title">When a running worker goes quiet</title>
+  <desc id="desc">An unreachable agent stops receiving new work. Outstanding ownership stays uncertain until completion or loss can be verified. Eligible audited losses may be retried if the queue opted in.</desc>
+  <defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#455d6c"/></marker></defs>
+  <rect width="960" height="287" rx="14" fill="#fbfcfa"/>
+  <g font-family="DejaVu Sans, Arial, sans-serif">
+    <text x="28" y="41" text-anchor="start" font-size="26" font-weight="700" fill="#19334a">When a running worker goes quiet</text>
+    <rect x="28" y="92" width="216" height="86" rx="8" fill="#fff3e4" stroke="#c6d2d7"/><text x="42" y="118" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Contact lost</text><text x="42" y="141" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Last report is stale.</text><text x="42" y="161" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Work may still be running.</text>
+    <rect x="312" y="92" width="254" height="86" rx="8" fill="#eef3f5" stroke="#c6d2d7"/><text x="326" y="118" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Hold the reservation</text><text x="326" y="141" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Stop new starts on that host.</text><text x="326" y="161" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Retain uncertain ownership.</text>
+    <path d="M 244 133 H 306" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 566 134 H 606 V 94 H 654" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 606 134 V 218 H 654" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <rect x="660" y="52" width="271" height="86" rx="8" fill="#e6f4ef" stroke="#c6d2d7"/><text x="674" y="78" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Completion verified</text><text x="674" y="101" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Keep the claim and result.</text><text x="674" y="121" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Reconcile the queue.</text>
+    <rect x="660" y="177" width="271" height="86" rx="8" fill="#fff3e4" stroke="#c6d2d7"/><text x="674" y="203" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Loss verified</text><text x="674" y="226" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Audit the lost job. Opt-in retry</text><text x="674" y="246" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">can requeue an eligible tail job.</text>
+    <text x="28" y="220" text-anchor="start" font-size="16" font-weight="400" fill="#455d6c">A timeout alone cannot establish that the process stopped.</text>
+  </g>
+</svg>

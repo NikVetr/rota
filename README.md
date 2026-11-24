@@ -9,6 +9,11 @@ The scheduler uses Bash, Python's standard library, and filesystem records rathe
 than a database. The tmux dashboard supports macOS and Linux CPU/memory sampling,
 queue progress, shared storage, and network/block-device activity.
 
+The [illustrated operations guide](docs/operations.md#submit-your-own-queue)
+traces one job through the scheduler and explains recovery after a worker loses
+contact. Its [ETA walkthrough](docs/operations.md#completion-estimates) shows
+how a queue can finish sooner when another queue releases its workers.
+
 ## Set up another cluster
 
 1. On the storage host (the coordinator), clone this repository with Git and open a Bash

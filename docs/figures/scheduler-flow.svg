@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 310" role="img" aria-labelledby="title desc">
+  <title id="title">How a queue becomes running jobs</title>
+  <desc id="desc">The coordinator receives a submission, uses capacity reported by agents and sends leased targets. A worker claims a job on shared storage and records completion after execution.</desc>
+  <defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#455d6c"/></marker></defs>
+  <rect width="960" height="310" rx="14" fill="#fbfcfa"/>
+  <g font-family="DejaVu Sans, Arial, sans-serif">
+    <text x="28" y="41" text-anchor="start" font-size="26" font-weight="700" fill="#19334a">How a queue becomes running jobs</text>
+    <rect x="28" y="85" width="188" height="86" rx="8" fill="#eef3f5" stroke="#c6d2d7"/><text x="42" y="111" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Submission</text><text x="42" y="134" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Queue of job IDs</text><text x="42" y="154" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">CPU + memory per job</text>
+    <rect x="276" y="85" width="192" height="86" rx="8" fill="#eef3f5" stroke="#c6d2d7"/><text x="290" y="111" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Coordinator</text><text x="290" y="134" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Fits jobs to each host</text><text x="290" y="154" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Publishes leased targets</text>
+    <rect x="539" y="85" width="173" height="86" rx="8" fill="#eef3f5" stroke="#c6d2d7"/><text x="553" y="111" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Host agent</text><text x="553" y="134" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Reports headroom</text><text x="553" y="154" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Starts local workers</text>
+    <rect x="769" y="85" width="164" height="86" rx="8" fill="#e6f4ef" stroke="#c6d2d7"/><text x="783" y="111" text-anchor="start" font-size="19" font-weight="700" fill="#19334a">Worker</text><text x="783" y="134" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Claims one job</text><text x="783" y="154" text-anchor="start" font-size="14" font-weight="400" fill="#455d6c">Runs its command</text>
+    <path d="M 216 126 H 271" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 468 126 H 534" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 712 126 H 764" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 625 85 V 65 H 371 V 80" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" stroke-dasharray="6 5"/>
+    <text x="499" y="58" text-anchor="middle" font-size="13" font-weight="400" fill="#455d6c">capacity reports</text>
+    <rect x="277" y="220" width="656" height="66" rx="8" fill="#e9f1f1" stroke="#c6d2d7"/>
+    <text x="293" y="246" text-anchor="start" font-size="18" font-weight="700" fill="#00796b">Shared storage</text>
+    <text x="293" y="270" text-anchor="start" font-size="15" font-weight="400" fill="#19334a">Queue records, job claims, completion markers and published outputs</text>
+    <path d="M 369 171 V 215" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <path d="M 846 171 V 215" stroke="#455d6c" fill="none" stroke-width="2" marker-end="url(#head)" />
+    <text x="29" y="252" text-anchor="start" font-size="15" font-weight="700" fill="#19334a">On each scheduler tick</text>
+    <text x="29" y="274" text-anchor="start" font-size="13" font-weight="400" fill="#455d6c">Running jobs keep their slots.</text>
+  </g>
+</svg>
