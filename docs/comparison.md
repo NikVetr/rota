@@ -25,11 +25,23 @@ I/O budgets by priority, and their priorities and limits can change while jobs r
 Workflow managers such as Snakemake and Nextflow sit above schedulers rather than replacing them.
 Celery is a task queue for Python functions, not a scheduler for shell commands.
 
+### Terms
+
+| Parallel Workers | Meaning | Nearest term elsewhere |
+| --- | --- | --- |
+| pool | The hosts and one coordinator, started together | HTCondor pool; a Slurm cluster |
+| coordinator | One process that plans how many jobs each host runs | Slurm controller (`slurmctld`), HTCondor central manager |
+| host daemon | One process per host that measures its load and starts jobs | Slurm `slurmd`, HTCondor `condor_startd`, Kubernetes kubelet |
+| queue | One submitted list of shell commands, with its own priority, limits and pause state | Slurm job array, HTCondor cluster. Not a Slurm partition or PBS queue, which are groups of nodes |
+| worker | The process that claims one job and runs it | HTCondor `condor_starter` |
+| reservation | The CPU, memory and devices charged to one running job | Kubernetes resource request, HTCondor dynamic slot |
+| lease | How long a host keeps acting on its last plan without hearing from the coordinator | Kubernetes node lease |
+
 ## What Parallel Workers has that the others mostly lack
 
 - **No installation beyond SSH.**
   - It is Bash, Python's standard library and plain files on a shared drive
-    ([README](../README.md)). Agents are ordinary user processes started over SSH. Nothing needs
+    ([README](../README.md)). Its host daemons are ordinary user processes started over SSH. Nothing needs
     root.
   - GNU Parallel is the only other system here with a comparable footprint.
   - Slurm needs a root daemon on every node, a controller and optionally MySQL. Kubernetes needs a

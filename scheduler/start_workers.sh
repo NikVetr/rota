@@ -686,7 +686,7 @@ if [ "$EXECUTION_MODE" = "adaptive-shared-queue" ]; then
     exit 1
   fi
   if [ "$MEMORY_CALIBRATION_ENABLED" -eq 1 ]; then
-    # Reuse the pool/agent capability audit while retaining the launch lock.
+    # Reuse the pool/daemon capability audit while retaining the launch lock.
     env ADAPTIVE_STATE_ROOT="$ADAPTIVE_STATE_ROOT" ADAPTIVE_POOL_MARKER="$ADAPTIVE_POOL_MARKER" \
       MODE_TRANSITION_LOCK="$MODE_TRANSITION_LOCK" \
       ADAPTIVE_COORDINATOR_SCRIPT="$ADAPTIVE_COORDINATOR_SCRIPT" \

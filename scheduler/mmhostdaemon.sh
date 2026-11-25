@@ -3,7 +3,7 @@
 set -u
 
 die() {
-  echo "mmadaptiveagent: $*" >&2
+  echo "mmhostdaemon: $*" >&2
   exit 1
 }
 
@@ -169,7 +169,7 @@ record_outcome() {
   failure_last_id="$id"
   save_failure "$queue"
   if [ "$failure_reason" != none ]; then
-    echo "mmadaptiveagent: holding queue $queue on $host_id: $failure_reason; explicit reset required" >&2
+    echo "mmhostdaemon: holding queue $queue on $host_id: $failure_reason; explicit reset required" >&2
   fi
 }
 
@@ -434,7 +434,7 @@ reconcile_reservations() {
   processes="$(ps -ww -axo pid=,ppid=,command= 2>/dev/null)" || \
     die "cannot audit adaptive worker processes"
   # Here-strings, not printf | awk: a forked printf writing a table larger than the pipe
-  # buffer once blocked forever on a pipe nobody drained, hanging the agent's shutdown.
+  # buffer once blocked forever on a pipe nobody drained, hanging the daemon's shutdown.
   if ! awk -v prefix="$pool_id.$host_id." \
       -v usage="$temporary" '
         BEGIN {
@@ -892,7 +892,7 @@ apply_host_policies() {
         signal_trees STOP $(cut -f2 <<< "$roots")
         owner_state=suspended
       else
-        echo "mmadaptiveagent: cannot record suspended reservations on $host_id; leaving them running" >&2
+        echo "mmhostdaemon: cannot record suspended reservations on $host_id; leaving them running" >&2
       fi
     fi
   elif [ "$owner_state" = idle ] || [ "$owner_state" = off ]; then
@@ -917,7 +917,7 @@ apply_host_policies() {
     else
       printf 'Ended by the scheduler: the job used %s MiB, over its memory limit of %s MiB.\n' \
         "$current" "$limit" > "$note"
-      echo "mmadaptiveagent: ending reservation $id on $host_id: $current MiB exceeds its $limit MiB limit" >&2
+      echo "mmhostdaemon: ending reservation $id on $host_id: $current MiB exceeds its $limit MiB limit" >&2
       signal_trees TERM "$job"
     fi
   done < "$usage_file"
@@ -999,7 +999,7 @@ enforce_plan() {
     [ "$failure_reason" = none ] || continue
     grants_started=0
     while [ "$grants_started" -lt "$grants" ] && [ "$queue_running" -lt "$target" ] &&
-          [ "$stop_agent" -eq 0 ] && [ "$SECONDS" -lt "$lease_deadline" ] &&
+          [ "$stop_daemon" -eq 0 ] && [ "$SECONDS" -lt "$lease_deadline" ] &&
           [ $((used_cpu + cpu)) -le "$live_cpu_units" ] &&
           [ $((used_memory + memory)) -le "$live_memory_mib" ] &&
           [ $((used_gpu + gpu)) -le "$gpu_budget" ]; do
@@ -1019,6 +1019,7 @@ publish_status() {
   local file calibration_report
   temporary="${status_file}.tmp.$$.$RANDOM"
   printf 'record_type\tpool_id\thost_id\tgeneration\tadmission\treservation_id\tqueue_id\tstate\tpid\tcpu_units\tmemory_mib\tobserved_memory_mib\tcharged_memory_mib\tmessage\tlive_cpu_units\tlive_memory_mib\tsmbd_cpu_tenths\ttelemetry_state\tresource_sample_epoch\tsmb_bytes\tcurrent_memory_mib\tsustained_memory_mib\towner_state\towner_idle_seconds\n' > "$temporary" || return 1
+  # The row's record type stays `agent`: Agent Bar and the pool ETA parse it.
   printf 'agent\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t%s\t%s\n' \
     "$pool_id" "$host_id" "$accepted_generation" "$admission" "$plan_message" \
     "$live_cpu_units" "$live_memory_mib" "$smbd_cpu_tenths" "$telemetry_state" "$resource_sample_epoch" \
@@ -1072,26 +1073,26 @@ done
 awk -v n="$poll_seconds" 'BEGIN {exit !(n ~ /^[0-9]+([.][0-9]+)?$/ && n > 0)}' || die "invalid poll interval"
 is_positive_int "$sample_seconds" || die "invalid sample interval"
 [ -d "$state_dir" ] || die "state directory does not exist: $state_dir"
-agent_file="$state_dir/agent.env"
-[ -r "$agent_file" ] || die "missing agent.env"
-[ "$(env_value "$agent_file" schema_version)" = 1 ] || die "unsupported agent schema"
-pool_id="$(env_value "$agent_file" pool_id)" || die "missing pool_id"
-host_id="$(env_value "$agent_file" host_id)" || die "missing host_id"
-cpu_budget="$(env_value "$agent_file" cpu_units)" || die "missing cpu_units"
-memory_budget="$(env_value "$agent_file" memory_mib)" || die "missing memory_mib"
+daemon_file="$state_dir/daemon.env"
+[ -r "$daemon_file" ] || die "missing daemon.env"
+[ "$(env_value "$daemon_file" schema_version)" = 1 ] || die "unsupported daemon schema"
+pool_id="$(env_value "$daemon_file" pool_id)" || die "missing pool_id"
+host_id="$(env_value "$daemon_file" host_id)" || die "missing host_id"
+cpu_budget="$(env_value "$daemon_file" cpu_units)" || die "missing cpu_units"
+memory_budget="$(env_value "$daemon_file" memory_mib)" || die "missing memory_mib"
 # Opt-in host settings; absent keys keep today's behavior.
-gpu_budget="$(optional_env_value "$agent_file" gpu_units 0)" || die "duplicate gpu_units"
-owner_idle_threshold="$(optional_env_value "$agent_file" owner_idle_seconds 0)" || die "duplicate owner_idle_seconds"
-owner_action="$(optional_env_value "$agent_file" owner_active hold)" || die "duplicate owner_active"
+gpu_budget="$(optional_env_value "$daemon_file" gpu_units 0)" || die "duplicate gpu_units"
+owner_idle_threshold="$(optional_env_value "$daemon_file" owner_idle_seconds 0)" || die "duplicate owner_idle_seconds"
+owner_action="$(optional_env_value "$daemon_file" owner_active hold)" || die "duplicate owner_active"
 is_uint "$gpu_budget" && is_uint "$owner_idle_threshold" || die "invalid host options"
 case "$owner_action" in hold|suspend) ;; *) die "invalid owner_active: $owner_action" ;; esac
 cpu_tolerance_pct=10
-runner_path="$(env_value "$agent_file" runner_path)" || die "missing runner_path"
-runner_hash="$(env_value "$agent_file" runner_sha256)" || die "missing runner_sha256"
-claim_hash="$(env_value "$agent_file" claim_sha256)" || die "missing claim_sha256"
+runner_path="$(env_value "$daemon_file" runner_path)" || die "missing runner_path"
+runner_hash="$(env_value "$daemon_file" runner_sha256)" || die "missing runner_sha256"
+claim_hash="$(env_value "$daemon_file" claim_sha256)" || die "missing claim_sha256"
 claim_script="${runner_path%/*}/adaptive_claim.py"
 memory_script="${runner_path%/*}/adaptive_memory.py"
-memory_hash="$(env_value "$agent_file" memory_sha256)" || die "missing memory_sha256"
+memory_hash="$(env_value "$daemon_file" memory_sha256)" || die "missing memory_sha256"
 case "$pool_id" in ''|.|..|*[!A-Za-z0-9._-]*) die "invalid pool ID" ;; esac
 case "$host_id" in ''|.|..|*[!A-Za-z0-9._-]*) die "invalid host ID" ;; esac
 is_positive_int "$cpu_budget" && is_positive_int "$memory_budget" || die "invalid host budget"
@@ -1133,46 +1134,46 @@ if [ ! -f "$counter_file" ]; then
 fi
 saved_generation="$(env_value "$generation_file" generation)" || die "invalid saved generation"
 reservation_counter="$(env_value "$counter_file" counter)" || die "invalid reservation counter"
-is_uint "$saved_generation" && is_uint "$reservation_counter" || die "invalid saved agent state"
+is_uint "$saved_generation" && is_uint "$reservation_counter" || die "invalid saved daemon state"
 
-agent_lock="$state_dir/agent.lock"
-lock_candidate="$state_dir/.agent.lock.$$.$RANDOM"
-lock_snapshot="$state_dir/.agent.lock.observed.$$.$RANDOM"
+daemon_lock="$state_dir/daemon.lock"
+lock_candidate="$state_dir/.daemon.lock.$$.$RANDOM"
+lock_snapshot="$state_dir/.daemon.lock.observed.$$.$RANDOM"
 lock_failure() {
   rm -f "$lock_candidate" "$lock_snapshot"
   die "$*"
 }
 atomic_write "$lock_candidate" "pid=$$" "script=$0" "pool_id=$pool_id" \
   "host_id=$host_id" "state_dir=$state_dir" "memory_control_version=1" \
-  "memory_calibration_version=1" || die "cannot prepare agent lock"
-if ! ln "$lock_candidate" "$agent_lock" 2>/dev/null; then
-  [ -f "$agent_lock" ] && ln "$agent_lock" "$lock_snapshot" 2>/dev/null ||
-    lock_failure "agent lock is incomplete or changing: $agent_lock"
-  owner_pid="$(env_value "$lock_snapshot" pid 2>/dev/null)" || lock_failure "agent lock has no unique PID"
-  owner_script="$(env_value "$lock_snapshot" script 2>/dev/null)" || lock_failure "agent lock has no unique script"
-  owner_pool="$(env_value "$lock_snapshot" pool_id 2>/dev/null)" || lock_failure "agent lock has no unique pool ID"
-  owner_host="$(env_value "$lock_snapshot" host_id 2>/dev/null)" || lock_failure "agent lock has no unique host ID"
-  owner_state="$(env_value "$lock_snapshot" state_dir 2>/dev/null)" || lock_failure "agent lock has no unique state directory"
+  "memory_calibration_version=1" || die "cannot prepare daemon lock"
+if ! ln "$lock_candidate" "$daemon_lock" 2>/dev/null; then
+  [ -f "$daemon_lock" ] && ln "$daemon_lock" "$lock_snapshot" 2>/dev/null ||
+    lock_failure "daemon lock is incomplete or changing: $daemon_lock"
+  owner_pid="$(env_value "$lock_snapshot" pid 2>/dev/null)" || lock_failure "daemon lock has no unique PID"
+  owner_script="$(env_value "$lock_snapshot" script 2>/dev/null)" || lock_failure "daemon lock has no unique script"
+  owner_pool="$(env_value "$lock_snapshot" pool_id 2>/dev/null)" || lock_failure "daemon lock has no unique pool ID"
+  owner_host="$(env_value "$lock_snapshot" host_id 2>/dev/null)" || lock_failure "daemon lock has no unique host ID"
+  owner_state="$(env_value "$lock_snapshot" state_dir 2>/dev/null)" || lock_failure "daemon lock has no unique state directory"
   [ "$owner_script" = "$0" ] && [ "$owner_pool" = "$pool_id" ] && \
     [ "$owner_host" = "$host_id" ] && [ "$owner_state" = "$state_dir" ] || \
-    lock_failure "agent lock identity does not match this state directory"
-  is_positive_int "$owner_pid" || lock_failure "agent lock PID is invalid"
+    lock_failure "daemon lock identity does not match this state directory"
+  is_positive_int "$owner_pid" || lock_failure "daemon lock PID is invalid"
   owner_command=""
   owner_command="$(ps -ww -o command= -p "$owner_pid" 2>/dev/null || true)"
   if [[ " $owner_command " == *" $owner_script "* &&
         " $owner_command " == *" --state-dir $owner_state "* ]]; then
-    lock_failure "another agent owns this state directory (pid $owner_pid)"
+    lock_failure "another daemon owns this state directory (pid $owner_pid)"
   fi
-  [ "$agent_lock" -ef "$lock_snapshot" ] || lock_failure "agent lock changed during owner audit"
-  rm -f "$agent_lock"
-  ln "$lock_candidate" "$agent_lock" 2>/dev/null || lock_failure "another agent acquired this state directory"
+  [ "$daemon_lock" -ef "$lock_snapshot" ] || lock_failure "daemon lock changed during owner audit"
+  rm -f "$daemon_lock"
+  ln "$lock_candidate" "$daemon_lock" 2>/dev/null || lock_failure "another daemon acquired this state directory"
 fi
 rm -f "$lock_candidate" "$lock_snapshot"
-stop_agent=0
-trap 'stop_agent=1' TERM INT
+stop_daemon=0
+trap 'stop_daemon=1' TERM INT
 telemetry_snapshot=""
 telemetry_original_snapshot=""
-trap 'resume_suspended; lock_pid="$(env_value "$agent_lock" pid 2>/dev/null || true)"; [ "$lock_pid" != "$$" ] || rm -f "$agent_lock"; [ -z "$telemetry_snapshot" ] || rm -f "$telemetry_snapshot"; [ -z "$telemetry_original_snapshot" ] || rm -f "$telemetry_original_snapshot"' EXIT
+trap 'resume_suspended; lock_pid="$(env_value "$daemon_lock" pid 2>/dev/null || true)"; [ "$lock_pid" != "$$" ] || rm -f "$daemon_lock"; [ -z "$telemetry_snapshot" ] || rm -f "$telemetry_snapshot"; [ -z "$telemetry_original_snapshot" ] || rm -f "$telemetry_original_snapshot"' EXIT
 
 SECONDS=0
 accepted_generation=0
@@ -1191,9 +1192,9 @@ resource_sample_epoch=0
 next_telemetry_sample=0
 owner_state=off
 owner_idle=""
-# A previous agent may have stopped with jobs suspended for the owner.
+# A previous daemon may have stopped with jobs suspended for the owner.
 resume_suspended
-while [ "$stop_agent" -eq 0 ]; do
+while [ "$stop_daemon" -eq 0 ]; do
   accept_plan
   apply_failure_resets
   reconcile_reservations

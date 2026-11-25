@@ -467,7 +467,7 @@ class AllocatorTests(unittest.TestCase):
 
 
 class BackfillTests(unittest.TestCase):
-    """Opt-in backfill into capacity earmarked for a drain reservation."""
+    """Opt-in backfill into capacity held back on a host draining for a large job."""
 
     def scenario(self, *, backfill=True, runtime=60, releases=((100, 1, 2048), (700, 1, 2048)),
                  low_running=2) -> dict:
@@ -496,7 +496,7 @@ class BackfillTests(unittest.TestCase):
         del data["backfill"]
         self.assertEqual(allocate(data), plan)
 
-    def test_short_jobs_use_free_earmarked_capacity(self) -> None:
+    def test_short_jobs_use_free_held_capacity(self) -> None:
         plan = allocate(self.scenario())
         # Both running jobs must end before the high job fits: the later one at 700 s.
         self.assertEqual(plan["backfill"]["ready_seconds"], {"h1": 700})
@@ -919,25 +919,25 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         (self.batch / "run_meta.env").write_text("total_jobs=2\n", encoding="utf-8")
         remote_state = self.remote_home / ".parallel-workers" / "adaptive" / self.pool_id
         remote_state.mkdir(parents=True)
-        (remote_state / "agent.env").write_text(
+        (remote_state / "daemon.env").write_text(
             f"schema_version=1\npool_id={self.pool_id}\nhost_id=host-1\n", encoding="utf-8",
         )
         remote_bin = remote_state / "bin"
         remote_bin.mkdir()
-        self.fake_agent_script = remote_bin / "mmadaptiveagent.sh"
-        self.fake_agent_script.write_text(
+        self.fake_daemon_script = remote_bin / "mmhostdaemon.sh"
+        self.fake_daemon_script.write_text(
             "#!/usr/bin/env bash\n"
             "trap 'kill \"$child\" 2>/dev/null || true; wait \"$child\" 2>/dev/null || true; exit 0' TERM\n"
             "sleep 300 &\nchild=$!\nwait \"$child\"\n",
             encoding="utf-8",
         )
-        self.fake_agent_script.chmod(0o755)
-        self.fake_agent = subprocess.Popen(
-            ["bash", str(self.fake_agent_script), "--state-dir", str(remote_state)],
+        self.fake_daemon_script.chmod(0o755)
+        self.fake_daemon = subprocess.Popen(
+            ["bash", str(self.fake_daemon_script), "--state-dir", str(remote_state)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        (remote_state / "agent.lock").write_text(
-            f"pid={self.fake_agent.pid}\nscript={self.fake_agent_script}\n"
+        (remote_state / "daemon.lock").write_text(
+            f"pid={self.fake_daemon.pid}\nscript={self.fake_daemon_script}\n"
             f"pool_id={self.pool_id}\nhost_id=host-1\nstate_dir={remote_state}\n",
             encoding="utf-8",
         )
@@ -982,7 +982,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             "schema_version=1\npool_id=pool-1\nstate=ACTIVE\n",
             encoding="utf-8",
         )
-        self.write_agent_status(0)
+        self.write_daemon_status(0)
         self.fake_ssh = self.root / "ssh"
         self.ssh_log = self.root / "ssh.log"
         self.ssh_log.write_text("", encoding="utf-8")
@@ -1005,8 +1005,8 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.fake_ssh.chmod(0o755)
 
     def tearDown(self) -> None:
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         self.temporary.cleanup()
 
     @property
@@ -1132,7 +1132,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_calibration_reprices_only_after_ack_and_failure_restores_requested_floor(self) -> None:
         self.enable_calibration()
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1, reservations=1)
+        self.write_daemon_status(1, reservations=1)
         self.append_calibration()
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1144,7 +1144,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(status, "requested_memory_mib_per_job"), "256")
         self.assertEqual(self.env_value(status, "effective_memory_mib_per_job"), "205")
         self.assertEqual(self.env_value(status, "propagation"), "pending")
-        self.write_agent_status(state["generation"], reservations=1)
+        self.write_daemon_status(state["generation"], reservations=1)
         remote_status = self.remote_state / "status.tsv"
         rows = remote_status.read_text().splitlines()
         row = rows[2].split("\t")
@@ -1155,7 +1155,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         state = json.loads(path.read_text())
         self.assertEqual(state["envelope_memory_mib_per_job"][self.queue_id], 205)
         self.assertEqual(self.env_value(status, "propagation"), "complete")
-        self.write_agent_status(state["generation"], reservations=1)
+        self.write_daemon_status(state["generation"], reservations=1)
         self.append_calibration(failure=time.time() - 0.1, held=True)
         self.assertEqual(self.run_once().returncode, 0)
         state = json.loads(path.read_text())
@@ -1164,13 +1164,13 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_stale_calibration_cannot_lower_and_manual_override_disables_learning(self) -> None:
         self.enable_calibration()
-        self.write_agent_status(0, sample_epoch=int(time.time()) - 60)
+        self.write_daemon_status(0, sample_epoch=int(time.time()) - 60)
         self.append_calibration()
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive/status.env"
         self.assertEqual(self.env_value(status, "effective_memory_mib_per_job"), "256")
         self.write_control(3, "paused", memory=128)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertEqual(self.env_value(status, "memory_calibration_state"), "off")
         self.assertEqual(self.env_value(status, "effective_memory_mib_per_job"), "128")
@@ -1219,7 +1219,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_memory_transition_accepts_only_authorized_floors_and_clamps_increases(self) -> None:
         self.write_control(2, "enabled", memory=512)
         queues = MODULE._load_queues(self.state, self.pool_id, "ACTIVE")
-        self.write_agent_status(0, reservations=1)
+        self.write_daemon_status(0, reservations=1)
         path = self.remote_state / "status.tsv"
         text = path.read_text()
         parsed = MODULE._parse_status(text, self.pool_id, "host-1", queues)
@@ -1246,7 +1246,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(state["memory_mib_per_job"][self.queue_id], 128)
         self.assertEqual(state["envelope_memory_mib_per_job"][self.queue_id], 256)
         self.assertEqual(state["memory_history"][self.queue_id], [128, 256])
-        self.write_agent_status(state["generation"])
+        self.write_daemon_status(state["generation"])
         self.assertEqual(self.run_once().returncode, 0)
         state = json.loads(state_path.read_text())
         self.assertEqual(state["envelope_memory_mib_per_job"][self.queue_id], 128)
@@ -1321,7 +1321,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(current, "lifecycle"), "PENDING")
         self.assertEqual(self.env_value(current, "blocking_reason"), "dependency_wait")
         self.assertEqual(self.env_value(current, "target_workers"), "0")
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         status.write_text(status.read_text().replace("PENDING", "COMPLETED"))
         self.assertEqual(self.run_once().returncode, 0)
         self.assertEqual(self.env_value(current, "target_workers"), "2")
@@ -1344,14 +1344,14 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_verified_tail_is_requeued_then_allocated_on_next_tick(self):
         self.prepare_verified_tail()
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive/status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "PENDING")
         self.assertEqual(self.env_value(status, "blocking_reason"), "lost_jobs_requeued")
         self.assertFalse((self.batch / "claims/job_job_2.claim").exists())
         self.assertTrue((self.batch / "claims/job_job_1.claim").exists())
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertEqual(self.env_value(status, "target_workers"), "1")
 
@@ -1359,7 +1359,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.prepare_verified_tail()
         self.write_control(1, "paused")
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive/status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "PENDING")
@@ -1367,9 +1367,9 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertTrue((self.batch / "claims/job_job_2.claim").exists())
         self.assertTrue((self.state / "queues" / f"{self.queue_id}.env").exists())
         self.write_control(2, "enabled")
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(3)
+        self.write_daemon_status(3)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertFalse((self.batch / "claims/job_job_2.claim").exists())
 
@@ -1377,7 +1377,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.prepare_verified_tail()
         (self.root / "lock").mkdir()
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertEqual(self.env_value(self.batch / "adaptive/status.env", "lifecycle"), "PENDING")
         self.assertTrue((self.state / "queues" / f"{self.queue_id}.env").exists())
@@ -1431,24 +1431,24 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         )
         return batch
 
-    def write_agent_status(
+    def write_daemon_status(
         self, generation: int, admission: str = "drain-only", reservations: int = 0,
         live_cpu: int = 2, live_memory: int = 2048, smbd_cpu_tenths: int = 0,
         telemetry_state: str = "ok",
         sample_epoch: int | None = None, smb_bytes: int = -1, owner_state: str = "off",
     ) -> None:
-        agent = [
+        daemon = [
             "agent", self.pool_id, "host-1", str(generation), admission,
             "", "", "", "", "", "", "", "", "ready", str(live_cpu),
             str(live_memory), str(smbd_cpu_tenths), telemetry_state,
             str(int(time.time()) if sample_epoch is None else sample_epoch), str(smb_bytes),
             "", "", owner_state, "-1" if owner_state == "off" else "12",
         ]
-        text = STATUS_HEADER + "\n" + "\t".join(agent) + "\n"
+        text = STATUS_HEADER + "\n" + "\t".join(daemon) + "\n"
         for index in range(reservations):
             reservation = [
                 "reservation", self.pool_id, "host-1", str(generation), admission,
-                f"res-{index}", self.queue_id, "running", str(self.fake_agent.pid),
+                f"res-{index}", self.queue_id, "running", str(self.fake_daemon.pid),
                 "1", "256", "0", "256", "", "", "", "", "", "", "",
                 "0", "0", "", "",
             ]
@@ -1508,7 +1508,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         deadline = state["start_pacing"]["next_epoch"]
         self.assertGreater(deadline, now)
         self.assertEqual(coordinator.next_tick_seconds, 1)
-        self.write_agent_status(1, "enabled", sample_epoch=int(deadline))
+        self.write_daemon_status(1, "enabled", sample_epoch=int(deadline))
         with mock.patch.dict(os.environ, environment), mock.patch.object(MODULE.time, "time", return_value=deadline + 0.01):
             # Recovery carries the pending ramp rather than restarting its delay.
             coordinator = MODULE.Coordinator(self.state, self.pool_id, self.resources, 4, 1, 10)
@@ -1520,19 +1520,19 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(status_path, "blocking_reason"), "none")
         allocation = self.remote_state / "allocations.2.tsv"
         self.assertEqual(allocation.read_text().splitlines()[1].split("\t")[1:3], ["1", "1"])
-        self.write_agent_status(2, "enabled", reservations=1, sample_epoch=int(deadline))
+        self.write_daemon_status(2, "enabled", reservations=1, sample_epoch=int(deadline))
         self.write_control(2, "paused")
         with mock.patch.dict(os.environ, environment), mock.patch.object(MODULE.time, "time", return_value=deadline + 0.1):
             self.assertFalse(coordinator.tick())
         self.assertEqual((self.remote_state / "allocations.3.tsv").read_text().splitlines()[1].split("\t")[1:3], ["0", "0"])
-        self.write_agent_status(3, "enabled", reservations=1, sample_epoch=int(deadline))
+        self.write_daemon_status(3, "enabled", reservations=1, sample_epoch=int(deadline))
         (self.state / "pool.env").write_text(f"pool_id={self.pool_id}\nstate=DRAINING\n")
         with mock.patch.dict(os.environ, environment), mock.patch.object(MODULE.time, "time", return_value=deadline + 0.2):
             self.assertFalse(coordinator.tick())
         self.assertEqual((self.remote_state / "allocations.4.tsv").read_text().splitlines()[1].split("\t")[1:3], ["0", "0"])
-        self.assertIsNone(self.fake_agent.poll())
+        self.assertIsNone(self.fake_daemon.poll())
 
-    def test_poll_reports_a_stopped_agent_only_when_the_host_answers(self) -> None:
+    def test_poll_reports_a_stopped_daemon_only_when_the_host_answers(self) -> None:
         environment = {"ADAPTIVE_SSH_BIN": str(self.fake_ssh),
                        "FAKE_REMOTE_HOME": str(self.remote_home),
                        "FAKE_SSH_LOG": str(self.ssh_log)}
@@ -1540,54 +1540,54 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment):
             status = coordinator._poll("host-1", {})
             self.assertTrue(status["reachable"])
-            self.assertFalse(status["agent_stopped"])
-            self.fake_agent.terminate()
-            self.fake_agent.wait(timeout=5)
+            self.assertFalse(status["daemon_stopped"])
+            self.fake_daemon.terminate()
+            self.fake_daemon.wait(timeout=5)
             status = coordinator._poll("host-1", {})
             self.assertFalse(status["reachable"])
-            self.assertTrue(status["agent_stopped"])
-            (self.remote_state / "agent.lock").unlink()
-            self.assertTrue(coordinator._poll("host-1", {})["agent_stopped"])
+            self.assertTrue(status["daemon_stopped"])
+            (self.remote_state / "daemon.lock").unlink()
+            self.assertTrue(coordinator._poll("host-1", {})["daemon_stopped"])
         unreachable = self.root / "ssh-unreachable"
         unreachable.write_text("#!/usr/bin/env bash\nexit 255\n", encoding="utf-8")
         unreachable.chmod(0o755)
         with mock.patch.dict(os.environ, {**environment, "ADAPTIVE_SSH_BIN": str(unreachable)}):
             status = coordinator._poll("host-1", {})
         self.assertFalse(status["reachable"])
-        self.assertFalse(status["agent_stopped"])
+        self.assertFalse(status["daemon_stopped"])
 
-    def test_a_stopped_agent_is_restarted_after_a_lease_with_backoff(self) -> None:
+    def test_a_stopped_daemon_is_restarted_after_a_lease_with_backoff(self) -> None:
         coordinator = MODULE.Coordinator(self.state, self.pool_id, self.resources, 4, 1, 10)
-        stopped = {"host-1": {"agent_stopped": True}}
+        stopped = {"host-1": {"daemon_stopped": True}}
         process = mock.Mock()
         process.poll.return_value = None
         with mock.patch.object(MODULE.subprocess, "Popen", return_value=process) as popen, \
                 mock.patch("builtins.print"):
-            coordinator._restart_stopped_agents(stopped, 1000)
-            coordinator._restart_stopped_agents(stopped, 1009)
+            coordinator._restart_stopped_daemons(stopped, 1000)
+            coordinator._restart_stopped_daemons(stopped, 1009)
             popen.assert_not_called()
-            coordinator._restart_stopped_agents(stopped, 1010)
+            coordinator._restart_stopped_daemons(stopped, 1010)
             arguments = popen.call_args.args[0]
             self.assertEqual(arguments[:6], [
-                str(coordinator.scheduler_script), "restart-agent", "--host_id", "host-1",
+                str(coordinator.scheduler_script), "restart-daemon", "--host_id", "host-1",
                 "--expected-pool-id", self.pool_id,
             ])
             self.assertTrue(popen.call_args.kwargs["start_new_session"])
-            self.assertIn("no agent on reachable host host-1 for 10 s",
-                          (self.state / "agent-restarts.log").read_text())
+            self.assertIn("no daemon on reachable host host-1 for 10 s",
+                          (self.state / "daemon-restarts.log").read_text())
             # One attempt runs at a time, and a failed one is retried only after the interval.
-            coordinator._restart_stopped_agents(stopped, 1011)
+            coordinator._restart_stopped_daemons(stopped, 1011)
             process.poll.return_value = 1
-            coordinator._restart_stopped_agents(stopped, 1012)
-            coordinator._restart_stopped_agents(stopped, 1010 + MODULE.AGENT_RESTART_INTERVAL_SECONDS - 1)
+            coordinator._restart_stopped_daemons(stopped, 1012)
+            coordinator._restart_stopped_daemons(stopped, 1010 + MODULE.DAEMON_RESTART_INTERVAL_SECONDS - 1)
             self.assertEqual(popen.call_count, 1)
-            coordinator._restart_stopped_agents(stopped, 1010 + MODULE.AGENT_RESTART_INTERVAL_SECONDS)
+            coordinator._restart_stopped_daemons(stopped, 1010 + MODULE.DAEMON_RESTART_INTERVAL_SECONDS)
             self.assertEqual(popen.call_count, 2)
-            # A host that answers again starts a fresh lease wait if its agent later stops.
+            # A host that answers again starts a fresh lease wait if its daemon later stops.
             process.poll.return_value = 0
-            coordinator._restart_stopped_agents({"host-1": {"agent_stopped": False}}, 3000)
-            self.assertNotIn("host-1", coordinator.agent_stopped_since)
-            coordinator._restart_stopped_agents(stopped, 3001)
+            coordinator._restart_stopped_daemons({"host-1": {"daemon_stopped": False}}, 3000)
+            self.assertNotIn("host-1", coordinator.daemon_stopped_since)
+            coordinator._restart_stopped_daemons(stopped, 3001)
             self.assertEqual(popen.call_count, 2)
 
     def test_invalid_pacing_state_and_settings_fail_loudly(self) -> None:
@@ -1604,7 +1604,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                                    start_interval_seconds=interval)
 
     def test_current_and_sustained_memory_must_fit_the_observed_charge(self) -> None:
-        self.write_agent_status(0, reservations=1)
+        self.write_daemon_status(0, reservations=1)
         path = self.remote_state / "status.tsv"
         lines = path.read_text().splitlines()
         row = lines[2].split("\t")
@@ -1643,19 +1643,19 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         # The host has not acknowledged yet, but an enabled queue with work waits as PENDING.
         self.assertEqual(self.env_value(status, "lifecycle"), "PENDING")
 
-        self.write_agent_status(1, "enabled")
+        self.write_daemon_status(1, "enabled")
         second = self.run_once()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(self.env_value(self.remote_state / "lease.env", "generation"), "2")
         self.assertEqual(self.env_value(status, "propagation"), "complete")
 
         self.write_control(2, "paused")
-        self.write_agent_status(2, "enabled")
+        self.write_daemon_status(2, "enabled")
         third = self.run_once()
         self.assertEqual(third.returncode, 0, third.stderr)
         self.assertEqual(self.env_value(status, "target_workers"), "0")
         self.assertEqual(self.env_value(status, "propagation"), "pending")
-        self.write_agent_status(3)
+        self.write_daemon_status(3)
         fourth = self.run_once()
         self.assertEqual(fourth.returncode, 0, fourth.stderr)
         self.assertEqual(self.env_value(status, "propagation"), "complete")
@@ -1663,7 +1663,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(retained, ["allocations.3.tsv", "allocations.4.tsv"])
 
     def test_live_capacity_limits_published_targets(self) -> None:
-        self.write_agent_status(0, live_cpu=1, live_memory=256)
+        self.write_daemon_status(0, live_cpu=1, live_memory=256)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         lease = self.remote_state / "lease.env"
@@ -1677,7 +1677,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(ready, "live_memory_mib"), "256")
 
     def test_unavailable_telemetry_publishes_zero_grants(self) -> None:
-        self.write_agent_status(
+        self.write_daemon_status(
             0, live_cpu=2, live_memory=2048, telemetry_state="unavailable"
         )
         result = self.run_once()
@@ -1708,7 +1708,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             self.assertEqual(coordinator._io_pressure(pressure)[0], "unavailable")
 
     def test_republished_status_cannot_hide_stale_resource_sample(self) -> None:
-        self.write_agent_status(0, sample_epoch=int(time.time()) - 60)
+        self.write_daemon_status(0, sample_epoch=int(time.time()) - 60)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         status = self.batch / "adaptive" / "status.env"
@@ -1726,7 +1726,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             "--cpu-units", "3", "--memory-mib", "3000",
         ]), 0)
         self.write_editable("".join(f"job_{i} true\n" for i in range(10)))
-        self.write_agent_status(0, live_cpu=4, live_memory=4096)
+        self.write_daemon_status(0, live_cpu=4, live_memory=4096)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         lease = self.remote_state / "lease.env"
@@ -1736,7 +1736,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(status, "target_workers"), "4")
         with mock.patch("builtins.print"):
             MODULE.set_host_budget(self.state, self.pool_id, "host-1", 1, 128)
-        self.write_agent_status(1, "enabled", reservations=2, live_cpu=4, live_memory=4096)
+        self.write_daemon_status(1, "enabled", reservations=2, live_cpu=4, live_memory=4096)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.env_value(lease, "memory_mib"), "128")
@@ -1756,7 +1756,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             coordinator.tick()
             self.assertEqual(coordinator.next_tick_seconds, 1)
             generation = int(self.env_value(self.remote_state / "lease.env", "generation"))
-            self.write_agent_status(generation, "enabled")
+            self.write_daemon_status(generation, "enabled")
             self.write_control(2, "paused")
             coordinator.tick()
             self.assertEqual(coordinator.next_tick_seconds, 5)
@@ -1779,7 +1779,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         )
         sampled = int(time.time()) - 6
         local_batch = self.register_queue("queue-local", shared_io=0)
-        self.write_agent_status(
+        self.write_daemon_status(
             0, reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=4000, sample_epoch=sampled,
         )
@@ -1814,35 +1814,35 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             .replace("admission=enabled", "admission=paused"),
             encoding="utf-8",
         )
-        self.write_agent_status(
+        self.write_daemon_status(
             1, "enabled", reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=3999, sample_epoch=sampled + 1,
         )
         first_clear = self.run_once(io_pressure_host="host-1", smbd_cpu_limit_pct=400)
         self.assertEqual(first_clear.returncode, 0, first_clear.stderr)
         self.assertEqual(self.env_value(ready, "io_pressure_state"), "high")
-        self.write_agent_status(
+        self.write_daemon_status(
             2, "enabled", reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=4000, sample_epoch=sampled + 2,
         )
         relapse = self.run_once(io_pressure_host="host-1", smbd_cpu_limit_pct=400)
         self.assertEqual(relapse.returncode, 0, relapse.stderr)
         self.assertEqual(self.env_value(ready, "io_pressure_state"), "high")
-        self.write_agent_status(
+        self.write_daemon_status(
             3, "enabled", reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=3999, sample_epoch=sampled + 3,
         )
         second_clear = self.run_once(io_pressure_host="host-1", smbd_cpu_limit_pct=400)
         self.assertEqual(second_clear.returncode, 0, second_clear.stderr)
         self.assertEqual(self.env_value(ready, "io_pressure_state"), "high")
-        self.write_agent_status(
+        self.write_daemon_status(
             4, "enabled", reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=3999, sample_epoch=sampled + 4,
         )
         third_clear = self.run_once(io_pressure_host="host-1", smbd_cpu_limit_pct=400)
         self.assertEqual(third_clear.returncode, 0, third_clear.stderr)
         self.assertEqual(self.env_value(ready, "io_pressure_state"), "high")
-        self.write_agent_status(
+        self.write_daemon_status(
             5, "enabled", reservations=1, live_cpu=2, live_memory=2048,
             smbd_cpu_tenths=3999, sample_epoch=sampled + 5,
         )
@@ -1879,7 +1879,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         for generation, (offset, smb_bytes) in enumerate(
             [(-6, 1000), (-3, 1100), (0, 1100 + 10 * 1048576)]
         ):
-            self.write_agent_status(
+            self.write_daemon_status(
                 generation, smbd_cpu_tenths=6000, sample_epoch=now + offset, smb_bytes=smb_bytes,
             )
             result = self.run_once(io_pressure_host="host-1", smbd_cpu_limit_pct=400)
@@ -1960,9 +1960,9 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual((row["target_running"], row["start_grants"]), ("2", "0"))
 
     def test_mid_run_priority_mutation_uses_one_shot_handoff(self) -> None:
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
-        (self.remote_state / "agent.lock").unlink()
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
+        (self.remote_state / "daemon.lock").unlink()
         (self.remote_state / "status.tsv").unlink()
 
         self.write_editable("low\n" * 4)
@@ -2009,7 +2009,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        shutil.copy2(ROOT / "scheduler" / "mmadaptiveagent.sh", self.fake_agent_script)
+        shutil.copy2(ROOT / "scheduler" / "mmhostdaemon.sh", self.fake_daemon_script)
         runner = self.remote_state / "bin" / "fake-runner.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
@@ -2041,7 +2041,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         shutil.copyfile(COORDINATOR.with_name("adaptive_memory.py"), memory_helper)
         memory_hash = hashlib.sha256(memory_helper.read_bytes()).hexdigest()
         runner_hash = hashlib.sha256(runner.read_bytes()).hexdigest()
-        (self.remote_state / "agent.env").write_text(
+        (self.remote_state / "daemon.env").write_text(
             "schema_version=1\npool_id=pool-1\nhost_id=host-1\n"
             "cpu_units=2\nmemory_mib=2048\n"
             f"runner_path={runner}\nrunner_sha256={runner_hash}\nclaim_sha256={claim_hash}\n"
@@ -2056,7 +2056,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         real_ps = shutil.which("ps")
         self.assertIsNotNone(real_ps)
         # Host processes outside this test stay anonymous, so a cluster node's own
-        # workers cannot read as fixed controllers that consume the agent budget.
+        # workers cannot read as fixed controllers that consume the daemon budget.
         probe_ps.write_text(
             "#!/usr/bin/env bash\n"
             "if [[ \"$*\" == *'pid=,ppid=,%cpu=,rss=,command='* ]]; then\n"
@@ -2070,19 +2070,19 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             encoding="utf-8",
         )
         probe_ps.chmod(0o755)
-        agent_environment = os.environ.copy()
-        agent_environment.update(
+        daemon_environment = os.environ.copy()
+        daemon_environment.update(
             LOW_ORIGINAL=str(self.root / "original.txt"),
             START_LOG=str(starts),
             RELEASE_LOW=str(release_low),
-            PATH=f"{probe_bin}:{agent_environment['PATH']}",
+            PATH=f"{probe_bin}:{daemon_environment['PATH']}",
         )
-        self.fake_agent = subprocess.Popen(
+        self.fake_daemon = subprocess.Popen(
             [
-                "bash", str(self.fake_agent_script), "--state-dir", str(self.remote_state),
+                "bash", str(self.fake_daemon_script), "--state-dir", str(self.remote_state),
                 "--poll-seconds", "0.05",
             ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=agent_environment,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=daemon_environment,
         )
 
         def wait_for(predicate, message: str) -> None:
@@ -2090,8 +2090,8 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 if predicate():
                     return
                 time.sleep(0.02)
-            agent_status = self.remote_state / "status.tsv"
-            detail = agent_status.read_text() if agent_status.exists() else "missing status"
+            daemon_status = self.remote_state / "status.tsv"
+            detail = daemon_status.read_text() if daemon_status.exists() else "missing status"
             self.fail(f"{message}\n{detail}")
 
         def status(generation: int, reservations: int) -> bool:
@@ -2099,9 +2099,9 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             if not path.exists():
                 return False
             rows = path.read_text(encoding="utf-8").splitlines()
-            agent_rows = [row.split("\t") for row in rows if row.startswith("agent\t")]
+            daemon_rows = [row.split("\t") for row in rows if row.startswith("agent\t")]
             return (
-                len(agent_rows) == 1 and int(agent_rows[0][3]) == generation
+                len(daemon_rows) == 1 and int(daemon_rows[0][3]) == generation
                 and sum(row.startswith("reservation\t") for row in rows) == reservations
             )
 
@@ -2112,7 +2112,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle, dialect="excel-tab"))
             return {row["queue_id"]: row for row in rows}
 
-        wait_for(lambda: status(0, 0), "real agent did not publish its initial status")
+        wait_for(lambda: status(0, 0), "real daemon did not publish its initial status")
         first = self.run_once()
         self.assertEqual(first.returncode, 0, first.stderr)
         wait_for(lambda: status(1, 2), "low-priority jobs did not occupy both slots")
@@ -2128,7 +2128,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         )
         handoff = self.run_once()
         self.assertEqual(handoff.returncode, 0, handoff.stderr)
-        wait_for(lambda: status(2, 2), "agent did not acknowledge the handoff plan")
+        wait_for(lambda: status(2, 2), "daemon did not acknowledge the handoff plan")
         plan = allocation()
         self.assertEqual(
             (plan[self.queue_id]["target_running"], plan[self.queue_id]["start_grants"]),
@@ -2137,7 +2137,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
         repeated = self.run_once()
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        wait_for(lambda: status(3, 2), "agent did not acknowledge the repeated shrink plan")
+        wait_for(lambda: status(3, 2), "daemon did not acknowledge the repeated shrink plan")
         repeated_plan = allocation()
         self.assertEqual(
             (repeated_plan[self.queue_id]["target_running"],
@@ -2196,7 +2196,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_draining_requires_acknowledged_zero_plan(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         (self.state / "pool.env").write_text(
             "schema_version=1\npool_id=pool-1\nstate=DRAINING\n", encoding="utf-8"
         )
@@ -2206,7 +2206,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         status = self.batch / "adaptive" / "status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "DRAINING")
         self.assertEqual(self.env_value(status, "propagation"), "pending")
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         second_drain = self.run_once()
         self.assertEqual(second_drain.returncode, 0, second_drain.stderr)
         self.assertEqual(self.env_value(self.state / "drained.env", "pool_id"), self.pool_id)
@@ -2215,7 +2215,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_paused_idle_queue_stays_pending_during_lease_renewal(self) -> None:
         self.write_control(2, "paused")
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive" / "status.env"
         self.assertEqual(self.env_value(status, "propagation"), "complete")
@@ -2244,7 +2244,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         state = json.loads((self.state / "plans" / "host-1" / "state.json").read_text())
         self.assertEqual(state["envelope_targets"], {self.queue_id: 2})
 
-        self.write_agent_status(state["generation"], reservations=1)
+        self.write_daemon_status(state["generation"], reservations=1)
         running = self.run_once()
         self.assertEqual(running.returncode, 0, running.stderr)
         self.assertEqual(self.env_value(status, "lifecycle"), "DRAINING")
@@ -2255,13 +2255,13 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.write_editable("")
         (self.batch / "done" / "job_1.done").write_text("ok\n", encoding="utf-8")
         (self.batch / "done" / "job_2.done").write_text("ok\n", encoding="utf-8")
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.assertEqual(self.run_once().returncode, 0)
         registration = self.state / "queues" / f"{self.queue_id}.env"
         self.assertTrue(registration.exists())
         status = self.batch / "adaptive" / "status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "DRAINING")
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertFalse(registration.exists())
         self.assertEqual(self.env_value(status, "lifecycle"), "COMPLETED")
@@ -2273,11 +2273,11 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_terminal_registration_waits_for_current_control(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
         self.write_editable("")
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.write_control(2, "paused")
         self.assertEqual(self.run_once().returncode, 0)
 
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         self.write_control(3, "paused")
         pending_control = self.run_once()
         self.assertEqual(pending_control.returncode, 0, pending_control.stderr)
@@ -2287,7 +2287,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(status, "lifecycle"), "FINISHED_INCOMPLETE")
         self.assertEqual(self.env_value(status, "propagation"), "pending")
 
-        self.write_agent_status(3)
+        self.write_daemon_status(3)
         applied = self.run_once()
         self.assertEqual(applied.returncode, 0, applied.stderr)
         self.assertFalse(registration.exists())
@@ -2305,14 +2305,14 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_closed_queue_with_pending_lines_becomes_incomplete_after_zero_ack(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         self.write_control(2, "closed")
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive" / "status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "DRAINING")
         self.assertEqual(self.env_value(status, "propagation"), "pending")
 
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertEqual(self.env_value(status, "lifecycle"), "FINISHED_INCOMPLETE")
         self.assertEqual(self.env_value(status, "propagation"), "complete")
@@ -2464,7 +2464,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertIn("duplicate ssh_target: fake-target", result.stderr)
         self.assertEqual(self.ssh_log.read_text(), "")
 
-    def test_invalid_agent_status_fails_closed_for_that_host(self) -> None:
+    def test_invalid_daemon_status_fails_closed_for_that_host(self) -> None:
         (self.remote_state / "status.tsv").write_text("broken\n", encoding="utf-8")
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2507,7 +2507,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         status = self.batch / "adaptive/status.env"
         status.mkdir()
         for generation in range(2):
-            self.write_agent_status(generation, "enabled")
+            self.write_daemon_status(generation, "enabled")
             result = self.run_once()
             self.assertEqual(result.returncode, 0, result.stderr)
             allocations = (self.remote_state / f"allocations.{generation + 1}.tsv").read_text()
@@ -2515,7 +2515,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             self.assertIn("queue-2\t2\t2", allocations)
             self.assertEqual(self.env_value(self.state / "coordinator.ready", "quarantined_queues"), "1")
         status.rmdir()
-        self.write_agent_status(2, "enabled")
+        self.write_daemon_status(2, "enabled")
         self.assertEqual(self.run_once().returncode, 0)
         self.assertIn("queue-1\t", (self.remote_state / "allocations.3.tsv").read_text())
         self.assertEqual(json.loads((self.state / "quarantine.json").read_text())["queues"], {})
@@ -2525,7 +2525,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         for job_id in ("job_1", "job_2"):
             (self.batch / "claims" / f"job_{job_id}.claim").mkdir()
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1, "enabled")
+        self.write_daemon_status(1, "enabled")
         (self.batch / "done").rmdir()
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2570,20 +2570,20 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         registration.write_text(re.sub(r"^resources_sha256=.*$", "resources_sha256=" +
             hashlib.sha256(self.resource_env.read_bytes()).hexdigest(),
             registration.read_text(), flags=re.M))
-        self.write_agent_status(0, "enabled", reservations=1)
+        self.write_daemon_status(0, "enabled", reservations=1)
         self.assertEqual(self.run_once().returncode, 0)
         self.assertTrue((self.state / "queue-profiles.json").exists())
         # A new coordinator process must use the durable costs even if the
         # registration is now unreadable and a running job still owns all I/O.
         registration.write_bytes(b"\xff")
-        self.write_agent_status(1, "enabled", reservations=1)
+        self.write_daemon_status(1, "enabled", reservations=1)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         allocations = (self.remote_state / "allocations.2.tsv").read_text()
         self.assertNotIn("queue-1\t", allocations)
         self.assertIn("queue-2\t0\t0", allocations)
         self.assertEqual(self.env_value(self.state / "coordinator.ready", "resource_state"), "ok")
-        self.write_agent_status(2, "enabled")
+        self.write_daemon_status(2, "enabled")
         self.assertEqual(self.run_once().returncode, 0)
         self.assertIn("queue-2\t2\t2", (self.remote_state / "allocations.3.tsv").read_text())
 
@@ -2599,10 +2599,10 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_quarantined_running_charge_limits_cpu_and_memory_without_closing_host(self) -> None:
         self.register_queue("queue-2")
-        self.write_agent_status(0, "enabled", reservations=1, live_memory=512)
+        self.write_daemon_status(0, "enabled", reservations=1, live_memory=512)
         self.assertEqual(self.run_once().returncode, 0)
         self.editable.write_text("job_1 false\n")
-        self.write_agent_status(1, "enabled", reservations=1, live_memory=512)
+        self.write_daemon_status(1, "enabled", reservations=1, live_memory=512)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("queue-2\t1\t1", (self.remote_state / "allocations.2.tsv").read_text())
@@ -2616,11 +2616,11 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         pool = self.state / "pool.env"
         pool.write_text(pool.read_text().replace("state=ACTIVE", "state=DRAINING"))
         for generation in (1, 2):
-            self.write_agent_status(generation, "enabled", reservations=1)
+            self.write_daemon_status(generation, "enabled", reservations=1)
             result = self.run_once()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((self.state / "drained.env").exists())
-        self.write_agent_status(3, "enabled")
+        self.write_daemon_status(3, "enabled")
         self.assertEqual(self.run_once().returncode, 0)
         self.assertTrue((self.state / "drained.env").exists())
 
@@ -2667,9 +2667,9 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         queues = MODULE._load_queues(self.state, self.pool_id, "ACTIVE")
         self.assertEqual(queues[self.queue_id]["allocator"]["pending_lines"], 0)
 
-    def test_stale_status_from_a_dead_agent_gets_no_plan(self) -> None:
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+    def test_stale_status_from_a_dead_daemon_gets_no_plan(self) -> None:
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.remote_state / "lease.env").exists())
@@ -2677,8 +2677,8 @@ class CoordinatorRuntimeTests(unittest.TestCase):
     def test_unreachable_prior_target_keeps_empty_queue_draining(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
         self.write_editable("")
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         status = self.batch / "adaptive" / "status.env"
@@ -2691,8 +2691,8 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.write_editable("")
         for job in (1, 2):
             (self.batch / "done" / f"job_{job}.done").write_text("ok\n")
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         status = self.batch / "adaptive/status.env"
@@ -2728,7 +2728,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             with self.subTest(owner_state=owner_state):
                 self.assertEqual(self.run_once().returncode, 0)
                 generation = int(self.env_value(self.remote_state / "lease.env", "generation"))
-                self.write_agent_status(generation, "enabled", owner_state=owner_state)
+                self.write_daemon_status(generation, "enabled", owner_state=owner_state)
                 result = self.run_once()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 generation = self.env_value(self.remote_state / "lease.env", "generation")
@@ -2769,8 +2769,8 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         # retry and rebinding, which need propagation=complete, need not wait for it.
         self.write_control(1, "closed")
         self.assertEqual(self.run_once().returncode, 0)
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         status = self.batch / "adaptive/status.env"
@@ -2780,18 +2780,18 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_offline_zero_target_with_unacknowledged_envelope_is_retained(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1, reservations=1)
+        self.write_daemon_status(1, reservations=1)
         self.write_control(2, "paused")
         self.assertEqual(self.run_once().returncode, 0)
         self.write_editable("")
-        self.fake_agent.terminate()
-        self.fake_agent.wait(timeout=5)
+        self.fake_daemon.terminate()
+        self.fake_daemon.wait(timeout=5)
         self.assertEqual(self.run_once().returncode, 0)
         status = self.batch / "adaptive/status.env"
         self.assertEqual(self.env_value(status, "lifecycle"), "DRAINING")
         self.assertTrue((self.state / "queues" / f"{self.queue_id}.env").exists())
 
-    def test_stale_status_from_a_live_agent_gets_no_plan(self) -> None:
+    def test_stale_status_from_a_live_daemon_gets_no_plan(self) -> None:
         status = self.remote_state / "status.tsv"
         stale_epoch = time.time() - 20
         os.utime(status, (stale_epoch, stale_epoch))
@@ -2801,7 +2801,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_failed_shrink_keeps_conservative_pending_envelope(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1, reservations=2)
+        self.write_daemon_status(1, reservations=2)
         self.write_control(2, "paused")
         result = self.run_once(FAKE_FAIL_PUBLISH="1")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2815,7 +2815,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_successful_shrink_keeps_envelope_until_acknowledged(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1, "enabled", reservations=2)
+        self.write_daemon_status(1, "enabled", reservations=2)
         self.write_control(2, "paused")
 
         shrink = self.run_once()
@@ -2833,7 +2833,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(state["targets"], {"queue-1": 0})
         self.assertEqual(state["envelope_targets"], {"queue-1": 2})
 
-        self.write_agent_status(2, "enabled")
+        self.write_daemon_status(2, "enabled")
         acknowledged = self.run_once()
         self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
         state = json.loads(state_path.read_text())
@@ -2871,7 +2871,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     def test_missing_enabled_host_state_fails_loudly(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(1)
+        self.write_daemon_status(1)
         (self.state / "plans" / "host-1" / "state.json").unlink()
         result = self.run_once()
         self.assertEqual(result.returncode, 2)
@@ -2888,9 +2888,9 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid targets in host plan state: host-1", result.stderr)
 
-    def test_agent_generation_ahead_of_local_state_is_not_acknowledged(self) -> None:
+    def test_daemon_generation_ahead_of_local_state_is_not_acknowledged(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
-        self.write_agent_status(2)
+        self.write_daemon_status(2)
         result = self.run_once()
         self.assertEqual(result.returncode, 0, result.stderr)
         status = self.batch / "adaptive" / "status.env"
@@ -2898,7 +2898,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         state = json.loads((self.state / "plans" / "host-1" / "state.json").read_text())
         self.assertEqual(state["envelope_targets"], {"queue-1": 2})
 
-    def test_uncertain_agent_keeps_its_last_plan_envelope(self) -> None:
+    def test_uncertain_daemon_keeps_its_last_plan_envelope(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
         lease = self.remote_state / "lease.env"
         self.assertEqual(self.env_value(lease, "generation"), "1")

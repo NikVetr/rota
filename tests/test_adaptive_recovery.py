@@ -30,7 +30,7 @@ class RecoveryTests(unittest.TestCase):
         self.batch = self.root / "batch"
         for directory in (self.state / "results", self.state / "reservations", self.batch / "claims", self.batch / "done"):
             directory.mkdir(parents=True)
-        env(self.state / "agent.env", pool_id="pool", host_id="host")
+        env(self.state / "daemon.env", pool_id="pool", host_id="host")
         (self.batch / "queue-edit.txt").write_text("one true\n")
         (self.batch / "claims/job_one.claim").mkdir()
         (self.batch / "done/job_one.done").write_text("completed output already exists")
@@ -192,9 +192,9 @@ class RebootTests(unittest.TestCase):
         self.state = Path(self.temporary.name) / "state"
         for directory in ("results", "reservations"):
             (self.state / directory).mkdir(parents=True)
-        env(self.state / "agent.env", pool_id="pool", host_id="host")
+        env(self.state / "daemon.env", pool_id="pool", host_id="host")
         self.request = dict(action="resolve-rebooted", pool_id="pool", host_id="host",
-                            reason="restart-agent after the host stopped answering")
+                            reason="restart-daemon after the host stopped answering")
         self.snapshot = f"{os.getpid()} {os.getppid()} 1 S python recovery\n1 0 1 S init\n"
         self.reserve(1, started=1000)
 
@@ -222,7 +222,7 @@ class RebootTests(unittest.TestCase):
         for number in (1, 2):
             self.assertEqual(self.result(number)["outcome"], "host_rebooted")
             self.assertEqual(self.result(number)["claimed_job_id"], "")
-            # The agent records the result and removes the reservation itself.
+            # The daemon records the result and removes the reservation itself.
             self.assertTrue((self.state / f"reservations/pool.host.{number}.env").exists())
         operator = MODULE.read_env(Path(outcome["audit_dir"]) / "operator.env")
         self.assertEqual(operator["boot_epoch"], str(self.BOOT))
@@ -230,7 +230,7 @@ class RebootTests(unittest.TestCase):
         self.assertEqual(operator["reason"], self.request["reason"])
         self.assertNotIn("queue_id", operator)
 
-    def test_work_started_near_or_after_the_boot_is_left_for_the_agent(self):
+    def test_work_started_near_or_after_the_boot_is_left_for_the_daemon(self):
         (self.state / "reservations/pool.host.1.env").unlink()
         self.reserve(2, started=self.BOOT - MODULE.BOOT_MARGIN_SECONDS)
         self.reserve(3, started=self.BOOT + 10)
@@ -243,9 +243,9 @@ class RebootTests(unittest.TestCase):
         self.assertEqual(self.recover()["rebooted_resolved"], "0")
         self.assertEqual(self.result(1)["outcome"], "succeeded")
 
-    def test_a_running_agent_or_reservation_worker_is_refused(self):
+    def test_a_running_daemon_or_reservation_worker_is_refused(self):
         for row in (
-            f"300 1 300 S bash {self.state}/bin/mmadaptiveagent.sh --state-dir {self.state}\n",
+            f"300 1 300 S bash {self.state}/bin/mmhostdaemon.sh --state-dir {self.state}\n",
             "301 1 301 S bash mmworker.sh 1 queue pool.host.1 result\n",
         ):
             with self.subTest(row=row), self.assertRaises(MODULE.RecoveryError):

@@ -45,7 +45,7 @@ raise SystemExit(subprocess.run(["bash", "-c", args[1]], env=os.environ).returnc
             output = subprocess.check_output(["bash", "-c", 'source "$1"; env -0', "test", str(env_file)])
             env = dict(item.decode().split("=", 1) for item in output.split(b"\0") if item)
             env.update(HOME=str(home), PATH=f"{binary}:{os.environ['PATH']}",
-                       ADAPTIVE_SSH_BIN=str(ssh), ADAPTIVE_AGENT_POLL_SECONDS="1")
+                       ADAPTIVE_SSH_BIN=str(ssh), ADAPTIVE_DAEMON_POLL_SECONDS="1")
             scheduler = share / "adaptive_scheduler.sh"
 
             def command(*args):

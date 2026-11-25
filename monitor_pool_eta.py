@@ -264,19 +264,19 @@ def read_hosts(root, pool, ready, now, lease):
             continue
         if not rows or any(r["pool_id"] != pool["pool_id"] or r["host_id"] != name for r in rows):
             continue
-        agent = next((r for r in rows if r["record_type"] == "agent"), None)
-        if agent is None:
+        daemon = next((r for r in rows if r["record_type"] == "agent"), None)
+        if daemon is None:
             continue
         for r in rows:
             if r["record_type"] == "blocked_queue":
                 host["blocked_queues"].append(r["queue_id"])
             elif r["record_type"] == "reservation":
                 charges[name, r["queue_id"]].append(int(r["charged_memory_mib"]))
-        host["reachable"] = (name not in unavailable and agent["telemetry_state"] == "ok"
-                             and -2 <= now - int(agent["resource_sample_epoch"]) <= lease
+        host["reachable"] = (name not in unavailable and daemon["telemetry_state"] == "ok"
+                             and -2 <= now - int(daemon["resource_sample_epoch"]) <= lease
                              and not any(r["state"] == "uncertain" for r in rows))
         if host["reachable"]:
-            host.update(live_cpu_units=int(agent["live_cpu_units"]), live_memory_mib=int(agent["live_memory_mib"]))
+            host.update(live_cpu_units=int(daemon["live_cpu_units"]), live_memory_mib=int(daemon["live_memory_mib"]))
     return hosts, charges
 
 

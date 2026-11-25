@@ -156,7 +156,7 @@ def reservation_host(reservation, pool_id):
 
 
 def host_holds(root):
-    """{queue_id: [{"host_id", "reason"}]} from the agents' blocked_queue rows in last-known tables."""
+    """{queue_id: [{"host_id", "reason"}]} from the daemons' blocked_queue rows in last-known tables."""
     holds = {}
     for table in sorted((root / "last-known").glob("*.tsv")):
         lines = table.read_text().splitlines()

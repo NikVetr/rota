@@ -11,6 +11,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
 DEPLOY_LOCK=${PARALLEL_WORKERS_ROOT}/.parallel-workers/mode-transition.lock
 DEPLOY_LOCK_TOKEN="deploy-$$-$(date +%s)"
 DEPLOY_LOCK_HELD=0
+RETIRED_SCHEDULER_FILES=(mmadaptiveagent.sh)
 
 # Matches cluster_config.py: the root reaches job tags and remote commands unquoted.
 case "$PARALLEL_WORKERS_ROOT" in
@@ -103,7 +104,7 @@ audit_scheduler_idle() {
   local active=0
   local -a audit_hosts=("$COORDINATOR")
   local audited_hosts=$'\n'
-  local process_pattern='[m]mworker_|[m]mworker[.]sh|[m]mshardworker_|[m]mshardcoordinator_|[m]madaptiveagent|[a]daptive_coordinator[.]py|[a]daptive_scheduler[.]sh|[s]tart_workers[.]sh|[k]ill_workers[.]sh|[r]econcile_queue_batch[.]sh|--[j]ob_tag'
+  local process_pattern='[m]mworker_|[m]mworker[.]sh|[m]mshardworker_|[m]mshardcoordinator_|[m]mhostdaemon|[m]madaptiveagent|[a]daptive_coordinator[.]py|[a]daptive_scheduler[.]sh|[s]tart_workers[.]sh|[k]ill_workers[.]sh|[r]econcile_queue_batch[.]sh|--[j]ob_tag'
 
   acquire_deploy_lock || return 1
   if ! output=$(ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" \
@@ -218,7 +219,7 @@ write_version_marker() {
 
 process_scheduler() {
   local status=0
-  local file version deployed_version_status deployed_version deployed_version_mode
+  local file version deployed_version_status deployed_version deployed_version_mode absent
 
   if [ "$CHECK_ONLY" -eq 0 ] && [ -n "$(git -C "$REPO_DIR" status --porcelain)" ]; then
     echo "Scheduler deployment requires a clean repository." >&2
@@ -231,7 +232,7 @@ process_scheduler() {
   fi
 
   for file in start_workers.sh mmworker.sh mmshardworker.sh mmshardcoordinator.sh \
-    mmadaptiveagent.sh adaptive_scheduler.sh kill_workers.sh reconcile_queue_batch.sh; do
+    mmhostdaemon.sh adaptive_scheduler.sh kill_workers.sh reconcile_queue_batch.sh; do
     if ! bash -n "$SNAPSHOT_DIR/$file"; then
       status=1
       continue
@@ -259,6 +260,26 @@ process_scheduler() {
     "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/README.md" 644 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/Stan/models/stochastic_volatility.stan" \
     "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/Stan/models/stochastic_volatility.stan" 644 || status=1
+
+  # Scripts the scheduler no longer uses (mmadaptiveagent.sh became mmhostdaemon.sh). Deployment
+  # runs only with no pool marker and no scheduler process, so nothing can still execute them.
+  for file in "${RETIRED_SCHEDULER_FILES[@]}"; do
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      absent=0
+      ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" "[ ! -e '${PARALLEL_WORKERS_ROOT}/$file' ]" || absent=$?
+      if [ "$absent" -eq 1 ]; then
+        echo "RETIRED  ${PARALLEL_WORKERS_ROOT}/$file is still present"
+        status=1
+      elif [ "$absent" -ne 0 ]; then
+        echo "Cannot check for retired ${PARALLEL_WORKERS_ROOT}/$file" >&2
+        status=1
+      fi
+    elif ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" "rm -f '${PARALLEL_WORKERS_ROOT}/$file'"; then
+      echo "REMOVED  ${PARALLEL_WORKERS_ROOT}/$file"
+    else
+      status=1
+    fi
+  done
 
   if [ "$CHECK_ONLY" -eq 1 ]; then
     deployed_version_status=$(ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" \

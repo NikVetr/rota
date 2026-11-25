@@ -258,7 +258,7 @@ case "$TAG_CLEAN" in *"'"*|*$'\n'*|*$'\r'*)
 esac
 
 # After a confirmed closure no host starts this queue's jobs, so a host SSH cannot reach
-# holds none when its last-known agent status lists none of them.
+# holds none when its last-known daemon status lists none of them.
 unreachable_without_batch_jobs() {
   local host_id status
   [ "$EXECUTION_MODE" = "adaptive-shared-queue" ] && [ -n "$QUEUE_ID" ] || return 1
@@ -349,7 +349,7 @@ for HOST in $HOST_LIST; do
   '"; then
     :
   elif [ $? -eq 255 ] && unreachable_without_batch_jobs "$HOST"; then
-    echo "Skipped $HOST: unreachable, and its last-known agent status holds no job from this batch"
+    echo "Skipped $HOST: unreachable, and its last-known daemon status holds no job from this batch"
   else
     echo "Failed to stop processes on $HOST" >&2
     STOP_FAILED=1

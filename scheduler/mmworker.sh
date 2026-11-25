@@ -45,7 +45,7 @@ ADAPTIVE_RESERVATION_FILE="${10:-}"
 ADAPTIVE_QUEUE_SHA256="${11:-}"
 ADAPTIVE_MODE=0
 ADAPTIVE_RESULT_WRITTEN=0
-# Devices the agent assigned to this reservation (opt-in gpu_units); jobs see them as CUDA devices.
+# Devices the daemon assigned to this reservation (opt-in gpu_units); jobs see them as CUDA devices.
 if [ -n "${PW_GPU_DEVICES:-}" ]; then
   export PW_GPU_DEVICES
   export CUDA_VISIBLE_DEVICES="$PW_GPU_DEVICES"
@@ -606,7 +606,7 @@ function process_job {
       eval "$JOB_COMMAND" 7<&- >> "$local_job_log_file" 2>&1 &
     fi
     job_pid=$!
-    # The agent's memory-limit watchdog signals only the job's own process tree.
+    # The daemon's memory-limit watchdog signals only the job's own process tree.
     [ "$ADAPTIVE_MODE" -eq 0 ] || printf '%s\n' "$job_pid" > "${ADAPTIVE_RESERVATION_FILE%.env}.jobpid" || \
       echo "$(date): Cannot record the PID of job $JOB_ID; its memory limit cannot be enforced." >> "$WORKER_LOG_FILE"
     if [ "$JOB_LOG_SYNC_SEC" -gt 0 ]; then

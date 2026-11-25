@@ -9,7 +9,7 @@ TRANSITION_LOCK="${MODE_TRANSITION_LOCK:-$(dirname "$STATE_ROOT")/mode-transitio
 CLUSTER_HOSTS_FILE="${ADAPTIVE_CLUSTER_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
 START_WORKERS_SCRIPT="${START_WORKERS_SCRIPT:-$SCRIPT_DIR/start_workers.sh}"
 COORDINATOR_SCRIPT="${ADAPTIVE_COORDINATOR_SCRIPT:-$SCRIPT_DIR/adaptive_coordinator.py}"
-AGENT_SCRIPT="${ADAPTIVE_AGENT_SCRIPT:-$SCRIPT_DIR/mmadaptiveagent.sh}"
+DAEMON_SCRIPT="${ADAPTIVE_DAEMON_SCRIPT:-$SCRIPT_DIR/mmhostdaemon.sh}"
 WORKER_SCRIPT="${WORKER_SCRIPT:-$SCRIPT_DIR/mmworker.sh}"
 CLAIM_SCRIPT="$SCRIPT_DIR/adaptive_claim.py"
 MEMORY_SCRIPT="$SCRIPT_DIR/adaptive_memory.py"
@@ -19,7 +19,7 @@ WORKFLOW_SCRIPT="$SCRIPT_DIR/adaptive_workflow.py"
 SSH_BIN="${ADAPTIVE_SSH_BIN:-ssh}"
 SSH_CONNECT_TIMEOUT="${ADAPTIVE_SSH_CONNECT_TIMEOUT:-8}"
 READY_TIMEOUT="${ADAPTIVE_READY_TIMEOUT:-15}"
-AGENT_POLL_SECONDS="${ADAPTIVE_AGENT_POLL_SECONDS:-1}"
+DAEMON_POLL_SECONDS="${ADAPTIVE_DAEMON_POLL_SECONDS:-1}"
 HELD_LOCKS=()
 TEMP_DIR=""
 MEMORY_CONTROL_VERSION=""
@@ -57,8 +57,8 @@ Commands:
   resolve-uncertain --batch_dir <dir> --host_id <id> --reservation_id <id>
                     [--verify_lost_job]  Audit a loss for opt-in tail retry
                     --reason <audit note> [--expected-pool-id <pool_id>]
-  restart-agent --host_id <id> [--reason <audit note>] [--expected-pool-id <pool_id>]
-                Restart one host's dead agent; releases work its reboot ended
+  restart-daemon --host_id <id> [--reason <audit note>] [--expected-pool-id <pool_id>]
+                Restart one host's dead daemon; releases work its reboot ended
   confirm-interrupted-jobs --batch_dir <dir> --reason <audit note>
                 Accept verified outputs of jobs that ran across a share interruption
 
@@ -294,7 +294,7 @@ write_pool() {
     echo "start_interval_seconds=$START_INTERVAL_SECONDS"
     echo "backfill=$BACKFILL"
     echo "lease_seconds=$LEASE_SECONDS"
-    echo "agent_sha256=$AGENT_HASH"
+    echo "daemon_sha256=$DAEMON_HASH"
     echo "worker_sha256=$WORKER_HASH"
     echo "claim_sha256=$CLAIM_HASH"
     echo "memory_sha256=$MEMORY_HASH"
@@ -319,7 +319,7 @@ ssh_no_input() {
 
 audit_host_adaptive_clear() {
   local target="$1" recover="$2" pattern audit remote_hostname snapshot output ancestor_pids
-  pattern='[.]parallel-workers/adaptive/[^ ]+/bin/[m]mworker[.]sh|[m]madaptiveagent[.]sh|[a]daptive_coordinator[.]py|(^|[ /])[a]daptive_scheduler[.]sh([ ]|$)'
+  pattern='[.]parallel-workers/adaptive/[^ ]+/bin/[m]mworker[.]sh|[m]madaptivedaemon[.]sh|[a]daptive_coordinator[.]py|(^|[ /])[a]daptive_scheduler[.]sh([ ]|$)'
   audit="$(ssh_no_input "$target" "hostname; ps -ww -axo pid=,command= | grep -E '$pattern' || true")" || \
     die "cannot audit scheduler processes on $target"
   remote_hostname="${audit%%$'\n'*}"
@@ -347,9 +347,10 @@ audit_host_adaptive_clear() {
   fi
   output="$(printf '%s\n' "$output" | awk '
     function base(path) {sub(/^.*\//, "", path); return path}
+    # mmadaptiveagent: the host daemon name in pools started before its rename.
     function scheduler(path, name) {
       name=base(path)
-      return name ~ /^(mmadaptiveagent[.]sh|adaptive_coordinator[.]py|adaptive_scheduler[.]sh)$/ ||
+      return name ~ /^(mmhostdaemon[.]sh|mmadaptiveagent[.]sh|adaptive_coordinator[.]py|adaptive_scheduler[.]sh)$/ ||
         path ~ /[.]parallel-workers\/adaptive\/[^ \/]+\/bin\/mmworker[.]sh$/
     }
     $1 ~ /^[0-9]+$/ {
@@ -358,7 +359,7 @@ audit_host_adaptive_clear() {
       if (!scheduler($script)) {
         shell=(executable ~ /^(bash|sh|zsh)$/)
         python=(executable ~ /^[Pp]ython([0-9]+([.][0-9]+)*)?$/)
-        if (!shell && !python && executable !~ /^(mmworker_|mmadaptiveagent_)/) next
+        if (!shell && !python && executable !~ /^(mmworker_|mmhostdaemon_|mmadaptiveagent_)/) next
         script++
         while ($script ~ /^-/) {
           if ($script == "--") {script++; break}
@@ -376,7 +377,7 @@ audit_host_adaptive_clear() {
   ')" || die "cannot classify scheduler processes on $target"
   if [ "$recover" -eq 1 ] && [ -n "$output" ]; then
     output="$(printf '%s\n' "$output" | awk -v pool="$POOL_ID" '
-      index($0, pool) && ($0 ~ /mmadaptiveagent[.]sh/ || $0 ~ /mmworker[.]sh/) {next}
+      index($0, pool) && ($0 ~ /mmhostdaemon[.]sh/ || $0 ~ /mmworker[.]sh/) {next}
       {print}
     ')"
   fi
@@ -395,65 +396,65 @@ incoming=\"\$state_dir/bin.incoming.\$\$\"
 mkdir -p \"\$state_dir\" \"\$incoming\"
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))'
 tar -xf - -C \"\$incoming\"
-[ \"\$(shasum -a 256 \"\$incoming/mmadaptiveagent.sh\" | awk '{print \$1}')\" = '$AGENT_HASH' ]
+[ \"\$(shasum -a 256 \"\$incoming/mmhostdaemon.sh\" | awk '{print \$1}')\" = '$DAEMON_HASH' ]
 [ \"\$(shasum -a 256 \"\$incoming/mmworker.sh\" | awk '{print \$1}')\" = '$WORKER_HASH' ]
 [ \"\$(shasum -a 256 \"\$incoming/adaptive_claim.py\" | awk '{print \$1}')\" = '$CLAIM_HASH' ]
 [ \"\$(shasum -a 256 \"\$incoming/adaptive_memory.py\" | awk '{print \$1}')\" = '$MEMORY_HASH' ]
 [ \"\$(shasum -a 256 \"\$incoming/adaptive_recovery.py\" | awk '{print \$1}')\" = '$RECOVERY_HASH' ]
 if [ -d \"\$state_dir/bin\" ]; then
-  cmp -s \"\$incoming/mmadaptiveagent.sh\" \"\$state_dir/bin/mmadaptiveagent.sh\"
+  cmp -s \"\$incoming/mmhostdaemon.sh\" \"\$state_dir/bin/mmhostdaemon.sh\"
   cmp -s \"\$incoming/mmworker.sh\" \"\$state_dir/bin/mmworker.sh\"
   cmp -s \"\$incoming/adaptive_claim.py\" \"\$state_dir/bin/adaptive_claim.py\"
   cmp -s \"\$incoming/adaptive_memory.py\" \"\$state_dir/bin/adaptive_memory.py\"
   cmp -s \"\$incoming/adaptive_recovery.py\" \"\$state_dir/bin/adaptive_recovery.py\"
-  rm -f \"\$incoming/mmadaptiveagent.sh\" \"\$incoming/mmworker.sh\" \"\$incoming/adaptive_claim.py\"
+  rm -f \"\$incoming/mmhostdaemon.sh\" \"\$incoming/mmworker.sh\" \"\$incoming/adaptive_claim.py\"
   rm -f \"\$incoming/adaptive_recovery.py\"
   rm -f \"\$incoming/adaptive_memory.py\"
   rmdir \"\$incoming\"
 else
   mv \"\$incoming\" \"\$state_dir/bin\"
-  chmod 700 \"\$state_dir/bin/mmadaptiveagent.sh\" \"\$state_dir/bin/mmworker.sh\"
+  chmod 700 \"\$state_dir/bin/mmhostdaemon.sh\" \"\$state_dir/bin/mmworker.sh\"
 fi
-agent=\"\$state_dir/agent.env\"
-if [ -f \"\$agent\" ]; then
-  grep -Fqx 'schema_version=1' \"\$agent\"
-  grep -Fqx 'pool_id=$POOL_ID' \"\$agent\"
-  grep -Fqx 'host_id=$host_id' \"\$agent\"
-  grep -Fqx 'cpu_units=$cpu' \"\$agent\"
-  grep -Fqx 'memory_mib=$memory' \"\$agent\"
-  grep -Fqx \"runner_path=\$state_dir/bin/mmworker.sh\" \"\$agent\"
-  grep -Fqx 'runner_sha256=$WORKER_HASH' \"\$agent\"
-  grep -Fqx 'claim_sha256=$CLAIM_HASH' \"\$agent\"
-  grep -Fqx 'memory_sha256=$MEMORY_HASH' \"\$agent\"
-  grep -Fqx 'gpu_units=$gpu' \"\$agent\"
-  grep -Fqx 'owner_idle_seconds=$owner_idle' \"\$agent\"
-  grep -Fqx 'owner_active=$owner_active' \"\$agent\"
+daemon=\"\$state_dir/daemon.env\"
+if [ -f \"\$daemon\" ]; then
+  grep -Fqx 'schema_version=1' \"\$daemon\"
+  grep -Fqx 'pool_id=$POOL_ID' \"\$daemon\"
+  grep -Fqx 'host_id=$host_id' \"\$daemon\"
+  grep -Fqx 'cpu_units=$cpu' \"\$daemon\"
+  grep -Fqx 'memory_mib=$memory' \"\$daemon\"
+  grep -Fqx \"runner_path=\$state_dir/bin/mmworker.sh\" \"\$daemon\"
+  grep -Fqx 'runner_sha256=$WORKER_HASH' \"\$daemon\"
+  grep -Fqx 'claim_sha256=$CLAIM_HASH' \"\$daemon\"
+  grep -Fqx 'memory_sha256=$MEMORY_HASH' \"\$daemon\"
+  grep -Fqx 'gpu_units=$gpu' \"\$daemon\"
+  grep -Fqx 'owner_idle_seconds=$owner_idle' \"\$daemon\"
+  grep -Fqx 'owner_active=$owner_active' \"\$daemon\"
 else
   { echo schema_version=1; echo pool_id='$POOL_ID'; echo host_id='$host_id';
     echo cpu_units='$cpu'; echo memory_mib='$memory';
     echo \"runner_path=\$state_dir/bin/mmworker.sh\"; echo runner_sha256='$WORKER_HASH';
     echo claim_sha256='$CLAIM_HASH'; echo memory_sha256='$MEMORY_HASH';
     echo gpu_units='$gpu'; echo owner_idle_seconds='$owner_idle'; echo owner_active='$owner_active';
-  } > \"\$agent.tmp.\$\$\"
-  chmod 600 \"\$agent.tmp.\$\$\"
-  mv \"\$agent.tmp.\$\$\" \"\$agent\"
-fi" < "$archive" || die "agent staging failed on $target"
+  } > \"\$daemon.tmp.\$\$\"
+  chmod 600 \"\$daemon.tmp.\$\$\"
+  mv \"\$daemon.tmp.\$\$\" \"\$daemon\"
+fi" < "$archive" || die "daemon staging failed on $target"
 }
 
-start_agent() {
+start_daemon() {
   local host_id="$1" target="$2" sample_seconds=$((LEASE_SECONDS / 3))
   [ "$sample_seconds" -ge 1 ] || sample_seconds=1
   [ "$sample_seconds" -le 5 ] || sample_seconds=5
   ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-owner=\"\$state_dir/agent.lock\"
+owner=\"\$state_dir/daemon.lock\"
 if [ -f \"\$owner\" ]; then
   pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$owner\")
   script=\$(awk -F= '\$1 == \"script\" {print \$2; exit}' \"\$owner\")
   owner_state=\$(awk -F= '\$1 == \"state_dir\" {print \$2; exit}' \"\$owner\")
   grep -Fqx 'pool_id=$POOL_ID' \"\$owner\"
   grep -Fqx 'host_id=$host_id' \"\$owner\"
-  [ \"\$script\" = \"\$state_dir/bin/mmadaptiveagent.sh\" ]
+  [ \"\$script\" = \"\$state_dir/bin/mmhostdaemon.sh\" ]
   [ \"\$owner_state\" = \"\$state_dir\" ]
   command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null || true)
   if [ -n \"\$command\" ] && [[ \" \$command \" == *\" \$script \"* ]] &&
@@ -461,17 +462,17 @@ if [ -f \"\$owner\" ]; then
      [ -f \"\$state_dir/status.tsv\" ]; then echo ALREADY_READY; exit 0; fi
   [ -z \"\$command\" ] || exit 8
 fi
-# A restarted agent must not erase the log of the one that died.
-[ ! -s \"\$state_dir/agent.log\" ] || mv -f \"\$state_dir/agent.log\" \"\$state_dir/agent.log.\$(date +%s)\"
-nohup bash -c \"exec -a 'mmadaptiveagent_${POOL_ID}_${host_id}' bash '\$state_dir/bin/mmadaptiveagent.sh' --state-dir '\$state_dir' --poll-seconds '$AGENT_POLL_SECONDS' --sample-seconds '$sample_seconds'\" < /dev/null > \"\$state_dir/agent.log\" 2>&1 &
+# A restarted daemon must not erase the log of the one that died.
+[ ! -s \"\$state_dir/daemon.log\" ] || mv -f \"\$state_dir/daemon.log\" \"\$state_dir/daemon.log.\$(date +%s)\"
+nohup bash -c \"exec -a 'mmhostdaemon_${POOL_ID}_${host_id}' bash '\$state_dir/bin/mmhostdaemon.sh' --state-dir '\$state_dir' --poll-seconds '$DAEMON_POLL_SECONDS' --sample-seconds '$sample_seconds'\" < /dev/null > \"\$state_dir/daemon.log\" 2>&1 &
 pid=\$!
 for attempt in \$(seq 1 '$READY_TIMEOUT'); do
-  lock_pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$state_dir/agent.lock\" 2>/dev/null || true)
+  lock_pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$state_dir/daemon.lock\" 2>/dev/null || true)
   if [ \"\$lock_pid\" = \"\$pid\" ] &&
-     grep -Fqx 'pool_id=$POOL_ID' \"\$state_dir/agent.lock\" &&
-     grep -Fqx 'host_id=$host_id' \"\$state_dir/agent.lock\" &&
-     grep -Fqx \"script=\$state_dir/bin/mmadaptiveagent.sh\" \"\$state_dir/agent.lock\" &&
-     grep -Fqx \"state_dir=\$state_dir\" \"\$state_dir/agent.lock\" &&
+     grep -Fqx 'pool_id=$POOL_ID' \"\$state_dir/daemon.lock\" &&
+     grep -Fqx 'host_id=$host_id' \"\$state_dir/daemon.lock\" &&
+     grep -Fqx \"script=\$state_dir/bin/mmhostdaemon.sh\" \"\$state_dir/daemon.lock\" &&
+     grep -Fqx \"state_dir=\$state_dir\" \"\$state_dir/daemon.lock\" &&
      kill -0 \"\$pid\" 2>/dev/null && [ -f \"\$state_dir/status.tsv\" ] &&
      awk -F '\t' -v pool='$POOL_ID' -v host='$host_id' '\$1 == \"agent\" && \$2 == pool && \$3 == host {ok=1} END {exit !ok}' \"\$state_dir/status.tsv\"; then
     echo READY
@@ -479,13 +480,13 @@ for attempt in \$(seq 1 '$READY_TIMEOUT'); do
   fi
   sleep 1
 done
-exit 7" >/dev/null || die "adaptive agent failed readiness on $target"
+exit 7" >/dev/null || die "adaptive daemon failed readiness on $target"
 }
 
-agent_lock_state() {
+daemon_lock_state() {
   local target="$1"
   ssh_no_input "$target" "
-lock=\"\$HOME/.parallel-workers/adaptive/$POOL_ID/agent.lock\"
+lock=\"\$HOME/.parallel-workers/adaptive/$POOL_ID/daemon.lock\"
 if [ -L \"\$lock\" ]; then
   exit 8
 elif [ -f \"\$lock\" ]; then
@@ -497,7 +498,7 @@ else
 fi"
 }
 
-audit_unowned_agent() {
+audit_unowned_daemon() {
   local action="$1" host_id="$2" target="$3" require_idle=0 token
   [ "$action" != finalize ] || require_idle=1
   # Auditing the coordinator itself goes over SSH to localhost, so the local ssh
@@ -507,7 +508,7 @@ audit_unowned_agent() {
   ssh_no_input "$target" "set -e
 : $token
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-lock=\"\$state_dir/agent.lock\"
+lock=\"\$state_dir/daemon.lock\"
 [ ! -e \"\$lock\" ] && [ ! -L \"\$lock\" ]
 if [ '$require_idle' = 1 ]; then
   [ -d \"\$state_dir/reservations\" ]
@@ -523,10 +524,10 @@ while [[ \"\$ancestor\" =~ ^[0-9]+\$ ]] && [ \"\$ancestor\" -gt 0 ]; do
   ancestor=\$next
 done
 if printf '%s\n' \"\$processes\" | awk -v skip=\"\$skip\" -v token='$token' \
-    -v agent=\"\$state_dir/bin/mmadaptiveagent.sh\" \
+    -v daemon=\"\$state_dir/bin/mmhostdaemon.sh\" \
     -v reservation='$POOL_ID.$host_id.' -v require_idle='$require_idle' '
       index(skip, \" \" \$1 \" \") || index(\$0, token) {next}
-      index(\$0, agent) || (require_idle && index(\$0, reservation)) {found=1}
+      index(\$0, daemon) || (require_idle && index(\$0, reservation)) {found=1}
       END {exit !found}
     '; then
   exit 8
@@ -570,25 +571,25 @@ done < <(printf '%s\\n' \"\$processes\" | awk -v prefix='$POOL_ID.$host_id.' '
 ')" >/dev/null || die "adaptive worker reservation audit failed on $target"
 }
 
-quiesce_agent() {
+quiesce_daemon() {
   local host_id="$1" target="$2" lock_state
-  lock_state="$(agent_lock_state "$target")" || die "cannot audit adaptive agent ownership on $target"
+  lock_state="$(daemon_lock_state "$target")" || die "cannot audit adaptive daemon ownership on $target"
   if [ "$lock_state" = ABSENT ]; then
-    audit_unowned_agent recover "$host_id" "$target" || \
-      die "an unowned adaptive agent process remains on $target"
+    audit_unowned_daemon recover "$host_id" "$target" || \
+      die "an unowned adaptive daemon process remains on $target"
     return
   fi
-  [ "$lock_state" = PRESENT ] || die "invalid adaptive agent lock state on $target"
+  [ "$lock_state" = PRESENT ] || die "invalid adaptive daemon lock state on $target"
   ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-lock=\"\$state_dir/agent.lock\"
+lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] || exit 8
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
 script=\$(awk -F= '\$1 == \"script\" {print \$2; exit}' \"\$lock\")
 grep -Fqx 'pool_id=$POOL_ID' \"\$lock\"
 grep -Fqx 'host_id=$host_id' \"\$lock\"
 grep -Fqx \"state_dir=\$state_dir\" \"\$lock\"
-[ \"\$script\" = \"\$state_dir/bin/mmadaptiveagent.sh\" ]
+[ \"\$script\" = \"\$state_dir/bin/mmhostdaemon.sh\" ]
 command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null || true)
 [ -z \"\$command\" ] && exit 0
 [[ \" \$command \" == *\" \$script \"* ]]
@@ -598,27 +599,27 @@ for attempt in \$(seq 1 '$READY_TIMEOUT'); do
   kill -0 \"\$pid\" 2>/dev/null || exit 0
   sleep 1
 done
-exit 7" >/dev/null || die "cannot quiesce old adaptive agent on $target"
+exit 7" >/dev/null || die "cannot quiesce old adaptive daemon on $target"
 }
 
-withhold_agent_lease() {
+withhold_daemon_lease() {
   local target="$1"
   ssh_no_input "$target" \
     "rm -f \"\$HOME/.parallel-workers/adaptive/$POOL_ID/lease.env\"" || \
     die "cannot close stale adaptive admission on $target"
 }
 
-agent_running_state() {
+daemon_running_state() {
   local target="$1"
   ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-lock=\"\$state_dir/agent.lock\"
-[ -f \"\$state_dir/agent.env\" ] || exit 9
+lock=\"\$state_dir/daemon.lock\"
+[ -f \"\$state_dir/daemon.env\" ] || exit 9
 [ ! -L \"\$lock\" ] || exit 8
 if [ -f \"\$lock\" ]; then
   pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
   command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null || true)
-  if [[ \" \$command \" == *\" \$state_dir/bin/mmadaptiveagent.sh \"* ]] &&
+  if [[ \" \$command \" == *\" \$state_dir/bin/mmhostdaemon.sh \"* ]] &&
      [[ \" \$command \" == *\" --state-dir \$state_dir \"* ]]; then
     echo RUNNING
     exit 0
@@ -629,19 +630,19 @@ fi
 echo STOPPED"
 }
 
-# After a reboot the dead agent's lock may name a PID that another process now
-# holds, which start_agent refuses. Keep it as evidence instead.
-retire_stale_agent_lock() {
+# After a reboot the dead daemon's lock may name a PID that another process now
+# holds, which start_daemon refuses. Keep it as evidence instead.
+retire_stale_daemon_lock() {
   local target="$1"
   ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-lock=\"\$state_dir/agent.lock\"
+lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] || exit 0
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
 command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null || true)
-[[ \" \$command \" != *\" \$state_dir/bin/mmadaptiveagent.sh \"* ]] || exit 8
-mv -f \"\$lock\" \"\$state_dir/agent.lock.stale.\$(date +%s)\"" || \
-    die "cannot retire the stale adaptive agent lock on $target"
+[[ \" \$command \" != *\" \$state_dir/bin/mmhostdaemon.sh \"* ]] || exit 8
+mv -f \"\$lock\" \"\$state_dir/daemon.lock.stale.\$(date +%s)\"" || \
+    die "cannot retire the stale adaptive daemon lock on $target"
 }
 
 recovery_helper() {
@@ -658,25 +659,25 @@ python3 \"\$helper\" --state-dir \"\$state\""
 make_stage_archive() {
   TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adaptive-stage.XXXXXX")"
   tar -cf "$TEMP_DIR/stage.tar" -C "$SCRIPT_DIR" \
-    "$(basename "$AGENT_SCRIPT")" "$(basename "$WORKER_SCRIPT")" "$(basename "$CLAIM_SCRIPT")" \
+    "$(basename "$DAEMON_SCRIPT")" "$(basename "$WORKER_SCRIPT")" "$(basename "$CLAIM_SCRIPT")" \
     "$(basename "$MEMORY_SCRIPT")" "$(basename "$RECOVERY_SCRIPT")"
 }
 
-restart_agent() {
-  local host_id="" expected="" reason="operator restart-agent" state row target cpu memory enabled
-  local agent_state payload outcome
+restart_daemon() {
+  local host_id="" expected="" reason="operator restart-daemon" state row target cpu memory enabled
+  local daemon_state payload outcome
   while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || die "$1 requires a value"
     case "$1" in
       --host_id) host_id="$2" ;;
       --expected-pool-id) expected="$2" ;;
       --reason) reason="$2" ;;
-      *) die "unknown restart-agent argument: $1" ;;
+      *) die "unknown restart-daemon argument: $1" ;;
     esac
     shift 2
   done
   [ -n "$host_id" ] && [ -n "${reason// /}" ] || \
-    die "restart-agent requires --host_id and a nonempty --reason"
+    die "restart-daemon requires --host_id and a nonempty --reason"
   reject_record_breaks "$host_id" "$expected" "$reason"
   assert_local_state_root
   acquire_lock "$TRANSITION_LOCK"
@@ -685,7 +686,7 @@ restart_agent() {
   [ -z "$expected" ] || [ "$POOL_ID" = "$expected" ] || die "adaptive pool identity changed"
   state="$(env_value "$POOL_FILE" state)"
   [[ "$state" = ACTIVE || "$state" = DRAINING ]] || \
-    die "agents restart only in an ACTIVE or DRAINING pool, not $state"
+    die "daemons restart only in an ACTIVE or DRAINING pool, not $state"
   coordinator_is_live "$(env_value "$POOL_FILE" coordinator_pid)" || \
     die "the coordinator is not running; recover the pool with pool-start --recover-inactive"
   RESOURCES_FILE="$(env_value "$POOL_FILE" resources_file)"
@@ -697,26 +698,26 @@ restart_agent() {
   [ -n "$row" ] || die "unknown adaptive host: $host_id"
   IFS=$'\t' read -r _ target cpu memory enabled gpu_units owner_idle owner_active <<< "$row"
   [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || \
-    die "host has no agent in this pool: $host_id"
+    die "host has no daemon in this pool: $host_id"
   # Stage only the pool's own files: the running coordinator expects them.
-  AGENT_HASH="$(env_value "$POOL_FILE" agent_sha256)"
+  DAEMON_HASH="$(env_value "$POOL_FILE" daemon_sha256)"
   WORKER_HASH="$(env_value "$POOL_FILE" worker_sha256)"
   CLAIM_HASH="$(env_value "$POOL_FILE" claim_sha256)"
   MEMORY_HASH="$(env_value "$POOL_FILE" memory_sha256)"
   RECOVERY_HASH="$(env_value "$POOL_FILE" recovery_sha256)"
-  [ "$(hash_file "$AGENT_SCRIPT")" = "$AGENT_HASH" ] && \
+  [ "$(hash_file "$DAEMON_SCRIPT")" = "$DAEMON_HASH" ] && \
     [ "$(hash_file "$WORKER_SCRIPT")" = "$WORKER_HASH" ] && \
     [ "$(hash_file "$CLAIM_SCRIPT")" = "$CLAIM_HASH" ] && \
     [ "$(hash_file "$MEMORY_SCRIPT")" = "$MEMORY_HASH" ] && \
     [ "$(hash_file "$RECOVERY_SCRIPT")" = "$RECOVERY_HASH" ] || \
     die "scheduler files differ from the running pool's; this host rejoins at the next pool start"
-  agent_state="$(agent_running_state "$target")" || die "cannot audit the adaptive agent on $target"
-  if [ "$agent_state" = RUNNING ]; then
+  daemon_state="$(daemon_running_state "$target")" || die "cannot audit the adaptive daemon on $target"
+  if [ "$daemon_state" = RUNNING ]; then
     echo "host_id=$host_id"
-    echo "agent=running"
+    echo "daemon=running"
     return 0
   fi
-  [ "$agent_state" = STOPPED ] || die "invalid adaptive agent state on $target"
+  [ "$daemon_state" = STOPPED ] || die "invalid adaptive daemon state on $target"
   audit_recovery_workers "$host_id" "$target"
   make_stage_archive
   stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar" \
@@ -726,11 +727,11 @@ restart_agent() {
     resolve-rebooted "$POOL_ID" "$host_id" "$reason")"
   outcome="$(recovery_helper "$target" "$POOL_ID" "$payload")" || \
     die "the reboot audit failed on $target"
-  withhold_agent_lease "$target"
-  retire_stale_agent_lock "$target"
-  start_agent "$host_id" "$target"
+  withhold_daemon_lease "$target"
+  retire_stale_daemon_lock "$target"
+  start_daemon "$host_id" "$target"
   echo "host_id=$host_id"
-  echo "agent=restarted"
+  echo "daemon=restarted"
   python3 -c 'import json,sys; result=json.loads(sys.argv[1])
 print("rebooted_resolved=" + result["rebooted_resolved"]); print("boot_epoch=" + result["boot_epoch"])' \
     "$outcome"
@@ -934,13 +935,13 @@ pool_start() {
   awk -v interval="$START_INTERVAL_SECONDS" \
     'BEGIN {exit !(interval ~ /^[0-9]+([.][0-9]+)?$/ && interval >= 0)}' || \
     die "start interval must be non-negative"
-  for required in "$COORDINATOR_SCRIPT" "$AGENT_SCRIPT" "$WORKER_SCRIPT" "$CLAIM_SCRIPT" "$MEMORY_SCRIPT" "$CALIBRATION_SCRIPT" "$RECOVERY_SCRIPT" "$WORKFLOW_SCRIPT"; do
+  for required in "$COORDINATOR_SCRIPT" "$DAEMON_SCRIPT" "$WORKER_SCRIPT" "$CLAIM_SCRIPT" "$MEMORY_SCRIPT" "$CALIBRATION_SCRIPT" "$RECOVERY_SCRIPT" "$WORKFLOW_SCRIPT"; do
     [ -r "$required" ] || die "required scheduler file is not readable: $required"
   done
   python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' 2>/dev/null || \
     die "adaptive coordination requires Python 3.9 or newer on the coordinator"
   RESOURCES_HASH="$(hash_file "$RESOURCES_FILE")"
-  AGENT_HASH="$(hash_file "$AGENT_SCRIPT")"
+  DAEMON_HASH="$(hash_file "$DAEMON_SCRIPT")"
   WORKER_HASH="$(hash_file "$WORKER_SCRIPT")"
   CLAIM_HASH="$(hash_file "$CLAIM_SCRIPT")"
   MEMORY_HASH="$(hash_file "$MEMORY_SCRIPT")"
@@ -950,7 +951,7 @@ pool_start() {
   WORKFLOW_HASH="$(hash_file "$WORKFLOW_SCRIPT")"
   if [ "$recover" -eq 1 ]; then
     [ "$(env_value "$POOL_FILE" resources_sha256)" = "$RESOURCES_HASH" ] && \
-      [ "$(env_value "$POOL_FILE" agent_sha256)" = "$AGENT_HASH" ] && \
+      [ "$(env_value "$POOL_FILE" daemon_sha256)" = "$DAEMON_HASH" ] && \
       [ "$(env_value "$POOL_FILE" worker_sha256)" = "$WORKER_HASH" ] && \
       [ "$(env_value "$POOL_FILE" claim_sha256)" = "$CLAIM_HASH" ] && \
       [ "$(env_value "$POOL_FILE" memory_sha256)" = "$MEMORY_HASH" ] && \
@@ -999,13 +1000,13 @@ pool_start() {
     [ -n "$host_id" ] || continue
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
     if [ "$recover" -eq 1 ]; then
-      quiesce_agent "$host_id" "$target"
+      quiesce_daemon "$host_id" "$target"
       audit_recovery_workers "$host_id" "$target"
-      withhold_agent_lease "$target"
+      withhold_daemon_lease "$target"
     fi
     stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar" \
     "${gpu_units:-0}" "${owner_idle:-0}" "${owner_active:-hold}"
-    start_agent "$host_id" "$target"
+    start_daemon "$host_id" "$target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
 
   coordinator_pid="$(start_coordinator)"
@@ -1132,31 +1133,31 @@ pool_status() {
   fi
 }
 
-agent_idle() {
+daemon_idle() {
   local action="$1" host_id="$2" target="$3" lock_state
-  lock_state="$(agent_lock_state "$target")" || return 1
+  lock_state="$(daemon_lock_state "$target")" || return 1
   if [ "$lock_state" = ABSENT ]; then
-    audit_unowned_agent finalize "$host_id" "$target"
+    audit_unowned_daemon finalize "$host_id" "$target"
     return
   fi
   [ "$lock_state" = PRESENT ] || return 1
   ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
-lock=\"\$state_dir/agent.lock\"
+lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] && [ -f \"\$state_dir/status.tsv\" ]
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
 script=\$(awk -F= '\$1 == \"script\" {print \$2; exit}' \"\$lock\")
 grep -Fqx 'pool_id=$POOL_ID' \"\$lock\"
 grep -Fqx 'host_id=$host_id' \"\$lock\"
 grep -Fqx \"state_dir=\$state_dir\" \"\$lock\"
-[ \"\$script\" = \"\$state_dir/bin/mmadaptiveagent.sh\" ]
+[ \"\$script\" = \"\$state_dir/bin/mmhostdaemon.sh\" ]
 command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null)
 [[ \" \$command \" == *\" \$script \"* ]]
 [[ \" \$command \" == *\" --state-dir \$state_dir \"* ]]
 awk -F '\t' -v pool='$POOL_ID' -v host='$host_id' '
-  \$1 == \"agent\" && \$2 == pool && \$3 == host && \$5 ~ /^(enabled|drain-only)\$/ {agent++}
+  \$1 == \"agent\" && \$2 == pool && \$3 == host && \$5 ~ /^(enabled|drain-only)\$/ {daemon++}
   \$1 == \"reservation\" {reservations++}
-  END {exit !(agent == 1 && reservations == 0)}
+  END {exit !(daemon == 1 && reservations == 0)}
 ' \"\$state_dir/status.tsv\"
 [ '$action' = verify ] && exit 0
 kill -TERM \"\$pid\"
@@ -1205,7 +1206,7 @@ finalize_drain() {
     sleep 1
   done
   coordinator_is_live "$pid" && die "drained coordinator did not exit"
-  # The coordinator has exited, so giving up would strand idle agents; waiting
+  # The coordinator has exited, so giving up would strand idle daemons; waiting
   # blocks nothing because the lock is not held meanwhile.
   until mkdir "$TRANSITION_LOCK" 2>/dev/null; do
     if [ "$announced" -eq 0 ]; then
@@ -1236,11 +1237,11 @@ finalize_drain() {
     die "adaptive resources file differs from the pool record"
   while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
-    agent_idle verify "$host_id" "$target" || die "cannot verify idle adaptive agent on $target"
+    daemon_idle verify "$host_id" "$target" || die "cannot verify idle adaptive daemon on $target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
   while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
-    agent_idle stop "$host_id" "$target" || die "cannot stop drained adaptive agent on $target"
+    daemon_idle stop "$host_id" "$target" || die "cannot stop drained adaptive daemon on $target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
   archive="${STATE_ROOT}.drained.${POOL_ID}.$(date +%s)"
   [ ! -e "$archive" ] || die "drain archive already exists: $archive"
@@ -1469,17 +1470,17 @@ assert_memory_controls_supported() {
     [ "$enabled" = 1 ] || continue
     if ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$pool\"
-lock=\"\$state_dir/agent.lock\"
+lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] && [ ! -L \"\$lock\" ]
 grep -Fqx '$feature=1' \"\$lock\"
 grep -Fqx 'pool_id=$pool' \"\$lock\"
 grep -Fqx 'host_id=$host' \"\$lock\"
 grep -Fqx \"state_dir=\$state_dir\" \"\$lock\"
-grep -Fqx \"script=\$state_dir/bin/mmadaptiveagent.sh\" \"\$lock\"
+grep -Fqx \"script=\$state_dir/bin/mmhostdaemon.sh\" \"\$lock\"
 pid=\$(awk -F= '\$1 == \"pid\" {n++; value=\$2} END {if (n != 1) exit 1; print value}' \"\$lock\")
 case \$pid in ''|*[!0-9]*) exit 1;; esac
 command=\$(ps -ww -p \"\$pid\" -o command=)
-case \" \$command \" in *\" \$state_dir/bin/mmadaptiveagent.sh \"*) ;; *) exit 1;; esac
+case \" \$command \" in *\" \$state_dir/bin/mmhostdaemon.sh \"*) ;; *) exit 1;; esac
 case \" \$command \" in *\" --state-dir \$state_dir \"*) ;; *) exit 1;; esac
 " >/dev/null; then
       continue
@@ -1491,7 +1492,7 @@ case \" \$command \" in *\" --state-dir \$state_dir \"*) ;; *) exit 1;; esac
       echo "set-memory: $host is unreachable; its existing memory charges remain reserved" >&2
       continue
     fi
-    die "agent on $target does not support $description; deploy every pool agent first"
+    die "daemon on $target does not support $description; deploy every pool daemon first"
   done < <(sed -n '2,$p' "$resources")
 }
 
@@ -1899,7 +1900,7 @@ case "$COMMAND" in
   queue-status) queue_status "$@" ;;
   wait-closed) wait_closed "$@" ;;
   reset-failures|resolve-uncertain) recovery_command "$@" ;;
-  restart-agent) restart_agent "$@" ;;
+  restart-daemon) restart_daemon "$@" ;;
   confirm-interrupted-jobs) confirm_interrupted_jobs "$@" ;;
   finalize-drain) finalize_drain "$@" ;;
   -h|--help|help) usage ;;

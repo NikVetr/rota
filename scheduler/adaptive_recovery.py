@@ -106,12 +106,12 @@ def audit_processes(text: str, reservation_id: str, pid: str, tag: str) -> None:
 
 def audit_rebooted(text: str, state: Path, reservation_ids: list[str]) -> None:
     # PIDs recorded before the boot may now belong to unrelated processes, so
-    # only an agent or a worker carrying a reservation identity is refused.
-    agent = str(state / "bin" / "mmadaptiveagent.sh")
+    # only a daemon or a worker carrying a reservation identity is refused.
+    daemon = str(state / "bin" / "mmhostdaemon.sh")
     for process_id, fields in other_processes(text):
         tokens = fields[4].split()
-        if agent in tokens or any(reservation_id in tokens for reservation_id in reservation_ids):
-            raise RecoveryError(f"adaptive agent or reservation worker is running: {process_id}")
+        if daemon in tokens or any(reservation_id in tokens for reservation_id in reservation_ids):
+            raise RecoveryError(f"adaptive daemon or reservation worker is running: {process_id}")
 
 
 def resolve_rebooted(state: Path, pool: str, host: str, evidence: dict[str, str]) -> dict[str, str]:
@@ -129,7 +129,7 @@ def resolve_rebooted(state: Path, pool: str, host: str, evidence: dict[str, str]
             or not reservation.get("started_epoch", "").isdigit()
         ):
             raise RecoveryError(f"invalid reservation record: {path}")
-        # A result is the agent's to record; a reservation from this boot may still run.
+        # A result is the daemon's to record; a reservation from this boot may still run.
         if (not (state / "results" / f"{reservation_id}.env").exists()
                 and int(reservation["started_epoch"]) < booted - BOOT_MARGIN_SECONDS):
             lost[reservation_id] = reservation
@@ -170,9 +170,9 @@ def recover(state: Path, request: dict[str, str]) -> dict[str, str]:
     reason = request["reason"]
     if not reason.strip() or any(character in reason for character in "\r\n\t"):
         raise RecoveryError("a single-line audit reason is required")
-    agent = read_env(state / "agent.env")
-    if agent["pool_id"] != pool or agent["host_id"] != host:
-        raise RecoveryError("agent identity changed")
+    daemon = read_env(state / "daemon.env")
+    if daemon["pool_id"] != pool or daemon["host_id"] != host:
+        raise RecoveryError("daemon identity changed")
     # A reboot proof covers every reservation on the host, not one queue.
     queue = None if action == "resolve-rebooted" else identifier(request["queue_id"])
     if queue is not None:

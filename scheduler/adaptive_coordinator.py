@@ -71,10 +71,10 @@ def _records(snapshot: dict[str, Any], key: str) -> list[dict[str, Any]]:
 IDENTIFIER = re.compile(r"^[A-Za-z0-9._-]+$")
 PRIORITY = re.compile(r"-?[0-9]+")
 DEFAULT_SCHEDULE_PRIORITY = 50
-# A host whose SSH works but whose agent is gone is restarted once it has been
+# A host whose SSH works but whose daemon is gone is restarted once it has been
 # stopped for a lease, and at most once per interval while restarts fail.
-AGENT_STOPPED = 3
-AGENT_RESTART_INTERVAL_SECONDS = 600
+DAEMON_STOPPED = 3
+DAEMON_RESTART_INTERVAL_SECONDS = 600
 
 
 def parse_priority_spec(spec: str) -> tuple[Optional[int], dict[str, Any]]:
@@ -234,6 +234,8 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
         observed[key] = count
         observed_memory[key] = memory
 
+    # Envelopes: per host and queue, the most jobs that may be running there: the observed
+    # reservations, or a granted target the host may have acted on without acknowledging it yet.
     envelopes = {(host, queue): observed.get((host, queue), 0)
                  for host in hosts for queue in queues}
     envelope_memory = {(host, queue): queues[queue]["memory"]
@@ -324,7 +326,8 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
     future_gpu = {host: 0 for host in host_ids}
     future_io = 0
     drain_reservations: list[dict[str, Any]] = []
-    # Backfill (opt-in): capacity earmarked for a drain reservation may run a job that is
+    # drain_reservations: hosts held back so a large job can start there once enough running
+    # work ends. Backfill (opt-in): capacity held back on such a host may run a job that is
     # forecast to finish before the reservation could fit anyway.
     backfill = _boolean(snapshot, "backfill", False)
     earmark = {host: [0, 0] for host in host_ids}
@@ -373,7 +376,7 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
         return sum(targets[host][queue_id] for host in host_ids)
 
     def relief(queue_id: str, host_id: str) -> tuple[int, int]:
-        """The earmark a backfill-eligible job may use on a host holding a drain reservation."""
+        """Capacity a backfill-eligible job may use on a host held back for a large job."""
         runtime = queues[queue_id].get("backfill_runtime")
         if (
             not backfill or runtime is None or host_id not in ready_in
@@ -1205,7 +1208,7 @@ def _parse_status(
     rows = text.splitlines()
     if not rows or rows[0] != STATUS_HEADER:
         raise SnapshotError(f"invalid status header from {host_id}")
-    agent: Optional[list[str]] = None
+    daemon: Optional[list[str]] = None
     reservations: dict[str, int] = {}
     reservation_memory_mib: dict[str, int] = {}
     reservation_ids: dict[str, str] = {}
@@ -1217,10 +1220,10 @@ def _parse_status(
         columns = line.split("\t")
         if len(columns) != STATUS_COLUMNS or columns[1] != pool_id or columns[2] != host_id:
             raise SnapshotError(f"invalid status row from {host_id}")
-        if columns[0] == "agent":
-            if agent is not None:
-                raise SnapshotError(f"duplicate agent status from {host_id}")
-            agent = columns
+        if columns[0] == "agent":  # the daemon's own row keeps its historical record type
+            if daemon is not None:
+                raise SnapshotError(f"duplicate daemon status from {host_id}")
+            daemon = columns
             continue
         if columns[0] == "blocked_queue":
             queue_id = columns[6]
@@ -1252,7 +1255,7 @@ def _parse_status(
         if columns[0] != "reservation" or not columns[5] or columns[5] in reservation_ids:
             raise SnapshotError(f"invalid reservation status from {host_id}")
         if any(columns[13:20]) or any(columns[22:24]):
-            raise SnapshotError(f"reservation status contains agent telemetry from {host_id}")
+            raise SnapshotError(f"reservation status contains daemon telemetry from {host_id}")
         queue_id = columns[6]
         if queue_id not in queues or columns[7] not in {"starting", "running", "uncertain"}:
             raise SnapshotError(f"unknown reservation in status from {host_id}")
@@ -1289,43 +1292,43 @@ def _parse_status(
             + max(charged_memory, profile["memory_mib_per_job"])
         )
         uncertain = uncertain or columns[7] == "uncertain"
-    if agent is None:
-        raise SnapshotError(f"missing agent status from {host_id}")
-    if any(agent[20:22]):
-        raise SnapshotError(f"agent status contains reservation memory from {host_id}")
-    owner_state = agent[22]
+    if daemon is None:
+        raise SnapshotError(f"missing daemon status from {host_id}")
+    if any(daemon[20:22]):
+        raise SnapshotError(f"daemon status contains reservation memory from {host_id}")
+    owner_state = daemon[22]
     try:
-        owner_idle = int(agent[23])
+        owner_idle = int(daemon[23])
     except ValueError as error:
         raise SnapshotError(f"invalid owner activity from {host_id}") from error
     if owner_state not in OWNER_STATES or owner_idle < -1:
         raise SnapshotError(f"invalid owner activity from {host_id}")
     try:
-        generation = int(agent[3])
-        live_cpu = int(agent[14])
-        live_memory = int(agent[15])
-        smbd_cpu_tenths = int(agent[16])
-        sample_epoch = int(agent[18])
-        smb_bytes = int(agent[19])
+        generation = int(daemon[3])
+        live_cpu = int(daemon[14])
+        live_memory = int(daemon[15])
+        smbd_cpu_tenths = int(daemon[16])
+        sample_epoch = int(daemon[18])
+        smb_bytes = int(daemon[19])
     except ValueError as error:
-        raise SnapshotError(f"invalid agent telemetry from {host_id}") from error
-    if generation < 0 or agent[4] not in {"enabled", "drain-only"}:
-        raise SnapshotError(f"invalid agent state from {host_id}")
+        raise SnapshotError(f"invalid daemon telemetry from {host_id}") from error
+    if generation < 0 or daemon[4] not in {"enabled", "drain-only"}:
+        raise SnapshotError(f"invalid daemon state from {host_id}")
     if (
         live_cpu < 0 or live_memory < 0 or smbd_cpu_tenths < 0 or sample_epoch < 0
-        or smb_bytes < -1 or agent[17] not in {"ok", "unavailable"}
+        or smb_bytes < -1 or daemon[17] not in {"ok", "unavailable"}
     ):
-        raise SnapshotError(f"invalid agent telemetry from {host_id}")
-    uncertain = uncertain or agent[13] == "uncertain_reservation"
+        raise SnapshotError(f"invalid daemon telemetry from {host_id}")
+    uncertain = uncertain or daemon[13] == "uncertain_reservation"
     return {
         "generation": generation, "reservations": reservations,
         "reservation_memory_mib": reservation_memory_mib,
-        "reservation_ids": reservation_ids, "admission": agent[4],
+        "reservation_ids": reservation_ids, "admission": daemon[4],
         "reservation_charges_mib": reservation_charges,
         "calibration_reports": calibration_reports,
         "uncertain": uncertain, "blocked_queues": blocked_queues, "live_cpu_units": live_cpu,
         "live_memory_mib": live_memory, "smbd_cpu_tenths": smbd_cpu_tenths,
-        "telemetry_state": agent[17], "resource_sample_epoch": sample_epoch,
+        "telemetry_state": daemon[17], "resource_sample_epoch": sample_epoch,
         "smb_bytes": smb_bytes, "owner_state": owner_state, "owner_idle_seconds": owner_idle,
     }
 
@@ -1514,9 +1517,9 @@ class Coordinator:
         self.memory_calibration: Optional[dict[str, Any]] = None
         self.saved_memory_calibration: Optional[dict[str, Any]] = None
         self.scheduler_script = Path(__file__).resolve().parent / "adaptive_scheduler.sh"
-        self.agent_stopped_since: dict[str, float] = {}
-        self.agent_restart_attempts: dict[str, float] = {}
-        self.agent_restarts: dict[str, subprocess.Popen] = {}
+        self.daemon_stopped_since: dict[str, float] = {}
+        self.daemon_restart_attempts: dict[str, float] = {}
+        self.daemon_restarts: dict[str, subprocess.Popen] = {}
 
     def _calibrate_memory(
         self, queues: dict[str, dict[str, Any]],
@@ -1762,21 +1765,21 @@ class Coordinator:
         host = self.hosts[host_id]
         memory_history = self._host_state(host_id)["memory_history"]
         remote = _remote_dir(self.pool_id)
-        # Exit AGENT_STOPPED means the host answered but no agent owns its state.
+        # Exit DAEMON_STOPPED means the host answered but no daemon owns its state.
         command = (
-            f"set -e; state={remote}; lock=\"$state/agent.lock\"; snapshot=\"$state/.poll-lock.$$\"; "
-            f"test -f \"$state/agent.env\"; test -f \"$lock\" || exit {AGENT_STOPPED}; "
+            f"set -e; state={remote}; lock=\"$state/daemon.lock\"; snapshot=\"$state/.poll-lock.$$\"; "
+            f"test -f \"$state/daemon.env\"; test -f \"$lock\" || exit {DAEMON_STOPPED}; "
             "ln \"$lock\" \"$snapshot\"; trap 'rm -f \"$snapshot\"' EXIT; "
             "pid=$(awk -F= '$1 == \"pid\" {print $2; exit}' \"$snapshot\"); "
             "script=$(awk -F= '$1 == \"script\" {sub(/^[^=]*=/, \"\"); print; exit}' \"$snapshot\"); "
             "owner_state=$(awk -F= '$1 == \"state_dir\" {sub(/^[^=]*=/, \"\"); print; exit}' \"$snapshot\"); "
             f"grep -Fqx 'pool_id={self.pool_id}' \"$snapshot\"; "
             f"grep -Fqx 'host_id={host_id}' \"$snapshot\"; "
-            "test \"$owner_state\" = \"$state\"; test \"$script\" = \"$state/bin/mmadaptiveagent.sh\"; "
+            "test \"$owner_state\" = \"$state\"; test \"$script\" = \"$state/bin/mmhostdaemon.sh\"; "
             "case $pid in ''|*[!0-9]*) exit 4;; esac; "
             "command=$(ps -ww -p \"$pid\" -o command= 2>/dev/null || true); "
-            f"case \" $command \" in *\" $script \"*) ;; *) exit {AGENT_STOPPED};; esac; "
-            f"case \" $command \" in *\" --state-dir $state \"*) ;; *) exit {AGENT_STOPPED};; esac; "
+            f"case \" $command \" in *\" $script \"*) ;; *) exit {DAEMON_STOPPED};; esac; "
+            f"case \" $command \" in *\" --state-dir $state \"*) ;; *) exit {DAEMON_STOPPED};; esac; "
             "status_file=\"$state/status.tsv\"; test -f \"$status_file\"; "
             "case $(uname -s) in Darwin) mtime=$(stat -f %m \"$status_file\");; "
             "*) mtime=$(stat -c %Y \"$status_file\");; esac; "
@@ -1819,10 +1822,10 @@ class Coordinator:
             elif not status["uncertain"]:
                 _atomic_text(cache, text)
             status["reachable"] = True
-            status["agent_stopped"] = False
+            status["daemon_stopped"] = False
             return status
         except SnapshotError as error:
-            agent_stopped = isinstance(error, RemoteExit) and error.returncode == AGENT_STOPPED
+            daemon_stopped = isinstance(error, RemoteExit) and error.returncode == DAEMON_STOPPED
             if cache.exists():
                 try:
                     status = _parse_status(
@@ -1846,35 +1849,35 @@ class Coordinator:
                     "smbd_cpu_tenths": 0, "telemetry_state": "unavailable",
                 }
             status["reachable"] = False
-            status["agent_stopped"] = agent_stopped
+            status["daemon_stopped"] = daemon_stopped
             return status
 
-    def _restart_stopped_agents(self, polled: dict[str, dict[str, Any]], now: float) -> None:
-        """Restart, through the scheduler, an agent that died on a host that still answers."""
-        for host_id, process in list(self.agent_restarts.items()):
+    def _restart_stopped_daemons(self, polled: dict[str, dict[str, Any]], now: float) -> None:
+        """Restart, through the scheduler, a daemon that died on a host that still answers."""
+        for host_id, process in list(self.daemon_restarts.items()):
             if process.poll() is not None:
-                del self.agent_restarts[host_id]
-                print(f"adaptive coordinator: restart-agent for {host_id} exited {process.returncode}",
+                del self.daemon_restarts[host_id]
+                print(f"adaptive coordinator: restart-daemon for {host_id} exited {process.returncode}",
                       file=sys.stderr)
         for host_id, status in polled.items():
-            if not status.get("agent_stopped"):
-                self.agent_stopped_since.pop(host_id, None)
+            if not status.get("daemon_stopped"):
+                self.daemon_stopped_since.pop(host_id, None)
                 continue
-            since = self.agent_stopped_since.setdefault(host_id, now)
+            since = self.daemon_stopped_since.setdefault(host_id, now)
             if (
-                host_id in self.agent_restarts or now - since < self.lease_seconds
-                or now - self.agent_restart_attempts.get(host_id, -math.inf)
-                < AGENT_RESTART_INTERVAL_SECONDS
+                host_id in self.daemon_restarts or now - since < self.lease_seconds
+                or now - self.daemon_restart_attempts.get(host_id, -math.inf)
+                < DAEMON_RESTART_INTERVAL_SECONDS
             ):
                 continue
-            self.agent_restart_attempts[host_id] = now
-            reason = f"coordinator: no agent on reachable host {host_id} for {int(now - since)} s"
-            print(f"adaptive coordinator: {reason}; running restart-agent", file=sys.stderr)
-            with (self.state_root / "agent-restarts.log").open("a", encoding="utf-8") as log:
+            self.daemon_restart_attempts[host_id] = now
+            reason = f"coordinator: no daemon on reachable host {host_id} for {int(now - since)} s"
+            print(f"adaptive coordinator: {reason}; running restart-daemon", file=sys.stderr)
+            with (self.state_root / "daemon-restarts.log").open("a", encoding="utf-8") as log:
                 log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z', time.localtime(now))} {reason}\n")
                 log.flush()
-                self.agent_restarts[host_id] = subprocess.Popen(
-                    [str(self.scheduler_script), "restart-agent", "--host_id", host_id,
+                self.daemon_restarts[host_id] = subprocess.Popen(
+                    [str(self.scheduler_script), "restart-daemon", "--host_id", host_id,
                      "--expected-pool-id", self.pool_id, "--reason", reason],
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -2220,7 +2223,7 @@ class Coordinator:
                 for host_id in sorted(poll_ids)
             }
             polled.update({host_id: future.result() for host_id, future in futures.items()})
-        self._restart_stopped_agents(polled, time.time())
+        self._restart_stopped_daemons(polled, time.time())
         self._calibrate_memory(queues, polled)
         # Recompute fresh reservation charges when calibration changes a floor.
         # Uncertain/offline hosts may only increase their aggregate charge;
@@ -2361,7 +2364,7 @@ class Coordinator:
             }
             for queue_id, queue in accounting.items()
         }
-        # The agent poll can span a short job's entire lifetime. Recheck the
+        # The daemon poll can span a short job's entire lifetime. Recheck the
         # two immutable claim IDs after polling before granting an early slot.
         for q, profile in allocator_queues.items():
             if profile.get("early_sample_remaining", 0):
