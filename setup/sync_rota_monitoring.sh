@@ -63,7 +63,7 @@ MONITOR_FILES=(
 
 for file in "${MONITOR_FILES[@]}"; do
   if [ ! -f "$MONITOR_DIR/$file" ]; then
-    echo "Monitoring source is missing: $REPO_DIR/$file" >&2
+    echo "Monitoring source is missing: $MONITOR_DIR/$file" >&2
     exit 1
   fi
 done

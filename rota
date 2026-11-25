@@ -16,10 +16,10 @@ usage() {
 Usage: rota <command> [arguments...]
 
 From a checkout:
-  control describe|apply   Machine-readable pool controls (JSON), as Agent Bar uses them
-  config ...               Render or check the cluster inventory (cluster_config.py)
-  doctor                   Check this host's setup
-  monitor ...              Start the tmux dashboard (start_monitoring.sh)
+  control describe|apply   Machine-readable pool controls (JSON) that Agent Bar uses (control/rota_control.py)
+  config ...               Render or check the cluster inventory (setup/cluster_config.py)
+  doctor                   Check SSH routes, tools and the shared drive (setup/doctor)
+  monitor ...              Start the tmux dashboard (monitor/start_monitoring.sh)
   deploy ...               Deploy the scheduler to the shared root (setup/deploy.sh)
 
 Through the shared root (${ROOT:-\$ROTA_ROOT, unset: source the inventory environment}):

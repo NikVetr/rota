@@ -17,7 +17,7 @@ usage() {
 Usage: $0 [--print | --uninstall]
 
 Installs $UNIT into $UNIT_DIR (ExecStart uses $REPO_DIR),
-then enables and starts it, and links the rota command (whose `rota control`
+then enables and starts it, and links the rota command (whose 'rota control'
 gives scheduler controls built on the collector snapshot) into ~/.local/bin. --print shows the unit without
 installing; --uninstall stops, disables and removes both.
 EOF

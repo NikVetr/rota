@@ -87,7 +87,8 @@ optional systemd user service instead collects shared snapshots for the CLI and
 Agent Bar. Install it from the checkout with the rendered environment sourced.
 Check it with `systemctl --user status rota-collector` or
 `journalctl --user -u rota-collector`. Rerun the installer after
-changing inventories.
+changing inventories or updating the checkout, so the service runs the current
+collector, and restart any dashboard started from the checkout.
 
 ### Completion estimates
 
@@ -143,7 +144,7 @@ python3 "$ROTA_ROOT/monitor_pool_eta.py" --root "$ROTA_ROOT" --json
 
 `pool_eta_sec` includes capacity released by other queues.
 `allocation_eta_sec` keeps each queue at its current worker count.
-For a one-off monitor view of the latter, use `monitor/monitor_queue_progress.sh
+For a one-off monitor view of the latter, use `"$ROTA_ROOT/monitor_queue_progress.sh"
 --eta_mode allocation`. Fixed-worker queues and host-local shards retain
 their own estimates.
 

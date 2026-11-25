@@ -113,7 +113,8 @@ For the shared snapshot used by the CLI and Agent Bar on Linux, run
 `./admin/install_cluster_status_collector.sh` from that configured shell, then
 `./rota monitor`. The installer keeps a local copy of the inventory
 settings for the service and `rota control`. Rerun the installer after selecting
-a different inventory. [Monitor and recover](docs/operations.md#monitor-and-recover)
+a different inventory or updating the checkout, and restart dashboards started from the
+checkout with `./rota monitor`. [Monitor and recover](docs/operations.md#monitor-and-recover)
 
 ## Supported workloads
 
