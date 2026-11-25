@@ -649,7 +649,7 @@ class Collector:
 
 def main():
     sys.path.append(str(SCRIPT_DIR.parent / "setup"))  # the inventory renderer, in a checkout
-    from cluster_config import load_monitor_environment
+    from cluster_config import load_monitor_environment  # type: ignore[reportMissingImports]  (setup/, added above)
     load_monitor_environment()
     state = default_state_dir()
     root = os.environ.get("ROTA_ROOT", "")
