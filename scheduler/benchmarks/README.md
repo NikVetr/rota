@@ -1,6 +1,7 @@
 # Benchmark suite (ROTA)
 
-This directory contains a mixed-workload benchmark intended to stress-test the queue runner and estimate per-node performance.
+Use the CPU, I/O and Stan jobs to put the queue runner under load and compare
+how long the same work takes on different hosts.
 
 ## Files
 
@@ -17,9 +18,9 @@ This directory contains a mixed-workload benchmark intended to stress-test the q
 
 ## Typical usage
 
-Source the rendered environment on the coordinator. The following CPU example
-uses base R. The Stan workloads also require cmdstanr and a working CmdStan
-installation on every eligible host. Use a new run ID for each run.
+Source the rendered environment on the coordinator. The CPU example below
+needs only base R. If you choose the Stan workload, install cmdstanr and
+CmdStan on every host that can take a job. Give each run a fresh ID.
 
 ```bash
 project="$ROTA_ROOT/stan_projects/test"

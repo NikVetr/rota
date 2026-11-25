@@ -1,10 +1,9 @@
 # Run your first two jobs
 
-Start with the [cluster setup](../../README.md#set-up-another-cluster).
-Use a Bash shell on the coordinator, in the repository checkout, with the
-generated environment sourced and the adaptive pool active. This example uses
-Python’s standard library. It squares two numbers and writes a separate
-result for each.
+The two jobs in this example square 3 and 7 and write one file apiece. They
+need only Python’s standard library. Complete the [cluster setup](../../README.md#set-up-another-cluster)
+first. With the adaptive pool active, open a Bash shell in the coordinator’s
+checkout and source the generated environment.
 
 ```bash
 project=$(bash examples/first-job/prepare.sh)
@@ -14,14 +13,15 @@ scheduler="$ROTA_ROOT/adaptive_scheduler.sh"
   --project first-job --run_name squares --cpu_units_per_job 1 --memory_mib_per_job 128
 ```
 
-Each queue line starts with a unique job ID, followed by the command a worker
-will execute. The preparer uses the configured shared root for all paths. Each
-worker’s SSH account needs access to the project and write access to
-`results/`. The preparer grants these permissions to the project’s group.
-The sample I/O reservation follows the pool’s configured default.
+In the printed queue, each line starts with a unique job ID. The rest of the
+line is the command the worker runs. The preparation script puts everything
+under the configured shared root and grants access to the project’s group.
+Each worker’s SSH account needs access to the project and permission to write
+to `results/`. These jobs use the pool’s default I/O reservation.
 
-Copy the `batch_dir` value printed by `submit` into `batch`. Check status
-until `lifecycle=COMPLETED`, then verify both completion markers and results.
+Set `batch` to the `batch_dir` printed by `submit`. When the status reaches
+`lifecycle=COMPLETED`, look for a completion marker for each job, then read the
+two results to check the arithmetic.
 
 ```bash
 batch=/path/printed/by/submit

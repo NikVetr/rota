@@ -1,9 +1,9 @@
 # How ROTA compares with other schedulers
 
-ROTA is a job scheduler for a handful of trusted macOS and Linux machines that share
-one drive. This page compares it with Slurm, Kubernetes, GNU Parallel and other systems, and says
-when each fits better. External facts come from each project's documentation as of November 2026;
-see [Sources](#sources).
+Suppose you have a few Macs and Linux machines, one shared drive, and more shell jobs
+than you can run at once. Which scheduler makes sense depends on who owns the machines,
+what the jobs need from one another, and what should happen if a host disappears.
+The comparisons below use each project’s documentation as of November 2026 ([sources](#sources)).
 
 ## Where it fits
 
@@ -17,13 +17,15 @@ see [Sources](#sources).
 | Single-machine queues | task-spooler, pueue | One user on one machine |
 | **Small shared-drive pool** | **ROTA** | One person or a small trusted group with a few personal or lab machines |
 
-ROTA sits between GNU Parallel and HTCondor or Slurm. Like GNU Parallel, it needs only
-SSH and standard tools: no root, no system services, no database and no containers. Unlike GNU
-Parallel, it keeps a persistent pool. Many queues share each host's CPU, memory and shared-drive
-I/O budgets by priority, and their priorities and limits can change while jobs run.
+For a single list of commands, GNU Parallel can distribute the work over SSH.
+ROTA adds a pool that stays up between submissions. If a second analysis arrives
+while the first is running, its queue can share the hosts’ CPU and memory and
+the pool’s shared-drive I/O budget. You can change priorities and limits as you
+go. Both tools run as an ordinary user. ROTA keeps its records in files on the
+shared drive and requires neither a database nor containers.
 
-Workflow managers such as Snakemake and Nextflow sit above schedulers rather than replacing them.
-Celery is a task queue for Python functions, not a scheduler for shell commands.
+Snakemake and Nextflow can hand work to a scheduler. Celery queues Python
+function calls. The unit of work in ROTA is a shell command.
 
 ### Terms
 
@@ -39,10 +41,10 @@ Celery is a task queue for Python functions, not a scheduler for shell commands.
 
 ## What ROTA has that the others mostly lack
 
-- **No installation beyond SSH.**
-  - It is Bash, Python's standard library and plain files on a shared drive
-    ([README](../README.md)). Its host daemons are ordinary user processes started over SSH. Nothing needs
-    root.
+- **User-level installation.**
+  - The coordinator starts each host daemon over SSH under the user’s account.
+    The scheduler uses Bash, Python’s standard library and files on the shared
+    drive. The [README](../README.md) lists the tools each host needs.
   - GNU Parallel is the only other system here with a comparable footprint.
   - Slurm needs a root daemon on every node, a controller and optionally MySQL. Kubernetes needs a
     control plane, etcd and containers. HTCondor and PBS run several daemons, and PBS also needs
@@ -50,48 +52,53 @@ Celery is a task queue for Python functions, not a scheduler for shell commands.
 - **macOS as a full execution host.**
   - Job memory on macOS counts the larger of resident size and physical footprint. Unrelated apps
     count the smaller.
-  - Revoked SMB file handles are detected, and the file server's load is guarded.
+  - Workers check for revoked SMB file handles. The scheduler can hold new I/O work
+    while the file server is overloaded.
   - Slurm, Kubernetes, Flux and multi-node Ray do not support macOS execution hosts.
   - HTCondor's Darwin port has documented caveats. Nomad runs on macOS only with the unisolated
     `raw_exec` driver.
 - **Borrowed and personal machines.**
-  - Each host can have its own priority or be `off` for a queue, so a friend's machine runs your
-    queue only when its owner's queues leave room.
-  - `set-host-state away` frees a host now or in a scheduled window, without stopping running jobs.
+  - Give a queue a lower priority on a borrowed machine and the owner’s queues get first
+    choice of its free slots. Set it to `off` there to keep it off that machine altogether.
+  - `set-host-state away` closes a host to new jobs now or in a scheduled window.
+    Jobs already running can finish.
   - Unrelated load on a host lowers its capacity automatically.
-  - HTCondor's desktop policy goes further and suspends jobs on keyboard activity. The large
-    schedulers have nothing comparable.
-- **Charging for observed memory, not just declarations.** A job is charged the larger of its
-  declared memory and recent observed use, held for five minutes after a spike. Ray, Dask and GNU
-  Parallel trust declarations or gate only at start. Slurm and Kubernetes enforce the declared limit
+  - ROTA and HTCondor can both suspend work when the owner uses the keyboard.
+    HTCondor can also vacate jobs or act on CPU load.
+- **Memory reservations that follow observed use.** ROTA charges the larger of a job’s declared
+  memory and its recent observed use. A high sample can affect admission for about five minutes.
+  Ray, Dask and GNU Parallel trust declarations or check available resources only at startup. Slurm and Kubernetes enforce the declared limit
   instead.
 - **Completion forecasts that replay the scheduler.**
   - The pool ETA simulates the real allocator each time a job is expected to finish, so it predicts
-    that a queue speeds up when another finishes ([operations guide](operations.md#completion-estimates)).
+    when a queue can use workers freed by another ([operations guide](operations.md#completion-estimates)).
   - Slurm (`squeue --start`) and PBS (`qstat -T`) estimate only when pending jobs will *start*.
     GNU Parallel's `--eta` covers one run.
 - **Leases that never kill work.**
   - A host that stops hearing from the coordinator starts nothing new once its 20-second lease
     expires, and its running jobs continue and stay charged.
-  - An unreachable host is never presumed lost, and success is never inferred: an uncertain job
-    stays charged until it is audited.
+  - A broken connection tells you little about the job itself. Its reservation stays charged
+    until someone can verify what happened.
 - **Admission for shared-drive I/O.** Queues declare I/O units against a pool-wide token count.
-  When the file server is overloaded, only queues that hold I/O units pause.
+  When the file server is overloaded, queues that need I/O units wait to start new jobs.
+  Jobs already running keep their reservations.
 - **Auditable state in plain files.**
-  - Queues are read-only copies. A claim is an atomic directory, and success is a done marker.
+  - Submission makes a read-only copy of the queue. A worker claims a job by creating its
+    claim directory atomically and records success by writing a done marker.
   - Controls, resets and recoveries are recorded with reasons.
   - Deploys require a clean Git tree, and each pool runs hash-pinned copies of the scheduler.
 
 ## What the others have that ROTA lacks
 
-The last column says whether ROTA now covers the gap as an opt-in setting
-([operations guide](operations.md#opt-in-host-and-queue-features)), or whether it could
-without giving up its design goals: no root, no services, macOS support.
+The last column distinguishes features you can enable now
+([operations guide](operations.md#opt-in-host-and-queue-features))
+from proposals. Where a feature would need privileged services, a different allocator
+or a change to how Macs can participate, the table explains why.
 
 | Feature | Who has it | In ROTA |
 | --- | --- | --- |
-| **Enforced resource limits** (cgroups) | Slurm, HTCondor and PBS on Linux; Kubernetes; Nomad on Linux | **Partly, opt-in.** `--memory_limit_mib` ends a job whose process tree exceeds the limit at a resource sample, on macOS and Linux. It is not a kernel limit: a fast spike can pass between samples. Linux cgroups (`systemd-run --user --scope -p MemoryMax=…`) would be a possible hardening where user delegation is enabled. |
-| **Preemption, suspend or requeue** | Slurm, HTCondor, Kueue, Volcano, Nomad | **Owner-triggered only, opt-in.** `owner_active: "suspend"` stops a host's running jobs while its owner is at the keyboard and resumes them afterwards. Preemption by priority, stopping or requeuing lower-priority work, stays absent by design: jobs are claimed exactly once and need not be safe to rerun. |
+| **Enforced resource limits** (cgroups) | Slurm, HTCondor and PBS on Linux; Kubernetes; Nomad on Linux | **Partly, opt-in.** `--memory_limit_mib` ends a job whose process tree exceeds the limit at a resource sample, on macOS and Linux. A brief spike can pass between samples. Linux cgroups (`systemd-run --user --scope -p MemoryMax=…`) would be a possible hardening where user delegation is enabled. |
+| **Preemption, suspend or requeue** | Slurm, HTCondor, Kueue, Volcano, Nomad | **Owner-triggered only, opt-in.** `owner_active: "suspend"` stops a host's running jobs while its owner is at the keyboard and resumes them afterwards. A higher-priority submission waits for a slot. Each job gets one claim, and rerunning a command may repeat work it has already done. |
 | **Backfill** with walltime-based reservations | Slurm, PBS | **Yes, opt-in** (`backfill: true`). A host held for a large job may run shorter jobs whose measured 90th-percentile runtime ends before the large job could fit. Estimates come from each queue's completed jobs, so there is no walltime to declare. |
 | **Fair share** across users, with accounting | Slurm (slurmdbd), HTCondor, flux-accounting | **Possible, low value.** The scheduler assumes trusted users. Per-owner usage could be summed from queue registrations and done markers. |
 | **Multi-user authentication and isolation** | Slurm (MUNGE), HTCondor tokens, Kubernetes RBAC, Flux | **No, by design.** It is a trusted-user tool ([support boundaries](../README.md#supported-workloads)). Real isolation needs privileged components. |
@@ -101,7 +108,7 @@ without giving up its design goals: no root, no services, macOS support.
 | **No shared drive required**: files are staged in and out | HTCondor, GNU Parallel `--transferfile`, Kubernetes volumes | **Partly.** The design depends on one shared drive. Per-queue stage-in and stage-out hooks are possible; claims and markers would still need it. |
 | **Checkpoint support** | HTCondor self-checkpointing | **Low priority.** Nothing is preempted, so checkpoints matter only to the application itself. |
 | **Scale** to thousands of nodes | Slurm, PBS, HTCondor, Kubernetes | **No.** It is tested on six hosts with about 50 cores, and the coordinator polls with at most 8 SSH threads. Dozens of hosts are probably workable but unverified. |
-| **Workflow-manager integration** | Executors for Slurm, HTCondor, Kubernetes, Flux in Snakemake; Nextflow | **Yes.** Snakemake's generic cluster executor could call `submit` and poll status; the workflow manager would add a dependency graph. Queues already support `--after` and `submit-chain`. |
+| **Workflow-manager integration** | Executors for Slurm, HTCondor, Kubernetes, Flux in Snakemake; Nextflow | **Possible through a generic executor.** Snakemake’s generic cluster executor could call `submit` and poll status. Snakemake would manage the dependency graph. Queues already support `--after` and `submit-chain`. |
 | **Idle detection on desktops** (suspend on keyboard use) | HTCondor | **Yes, opt-in** (host `owner_idle_seconds`). No new starts while the console is in use (macOS idle time, Linux logind idle hint), optionally suspending running jobs. HTCondor's policies go further, for example vacating jobs or reacting to CPU load as well as the keyboard. |
 
 ## Comparison at a glance
@@ -145,14 +152,13 @@ flowchart TD
     slurm ~~~ k8s ~~~ ray ~~~ slurm2 ~~~ parallel ~~~ condor
 ```
 
-**Choose ROTA when:**
-- you have a few personal or lab machines, including Macs, and one drive they all mount;
-- one person or a trusted group runs shell commands that take minutes to hours;
-- you want to change priorities, pause queues and lend machines without administrator help or
-  restarting work, including machines whose owners are sometimes at the keyboard;
-- you want a forecast of when each queue will finish.
+ROTA makes sense when a person or a small trusted group runs independent commands that take
+minutes to hours on machines that share a drive. Some of those machines can be Macs you
+still use at the keyboard. You can lend their spare capacity, change which results come
+first and see when each queue is likely to finish, all while the current jobs run.
 
-**Choose something else when:**
+Other requirements point to different tools.
+
 - **Many users need accounts, fair share or isolation,** or MPI, containers or a large GPU fleet
   are central: use Slurm, or Flux on HPC-style Linux clusters.
 - **Desktop owners need stronger guarantees than pausing and suspending,** such as vacating jobs,

@@ -3,13 +3,13 @@
 <title>Pool ETA · ROTA</title>
 <style>
 *{box-sizing:border-box}body{margin:0;font:17px/1.5 system-ui,sans-serif;color:#19334a;background:#f3f6f5}main{max-width:1040px;padding:clamp(16px,4vw,48px);margin:auto}h1{font-size:clamp(27px,4vw,42px);line-height:1.15;margin:0 0 .5em}p{max-width:68ch}figure{margin:24px 0 12px;overflow:auto;background:#fbfcfa;border:1px solid #bdcbcf;border-radius:12px}.chart{min-width:700px;position:relative}.chart img{width:100%;display:block}.cursor{position:absolute;top:29%;height:40%;width:2px;background:#172d40;transform:translateX(-50%);pointer-events:none}.cursor:before{content:"";position:absolute;top:-5px;left:-4px;border:5px solid transparent;border-top-color:#172d40}label,output{font-weight:650}button{padding:8px 18px;border:0;border-radius:6px;background:#184c55;color:white;font:inherit;cursor:pointer}input{width:100%;accent-color:#00796b;margin:10px 0}.controls{display:flex;align-items:center;gap:18px}.controls label{flex:1}.status{min-height:3em;padding:.75em 1em;border-left:4px solid #00796b;background:white}a{color:#006f63}button:focus-visible,input:focus-visible{outline:3px solid #af5b18;outline-offset:2px}
-</style></head><body><main><h1>When a queue gives up its workers</h1>
-<p>Queue A has 10 minutes of work on one worker. Queue B has 60. Move through the run to see when each job finishes and when the second worker becomes available to B.</p>
+</style></head><body><main><h1>When a queue frees a worker</h1>
+<p>Two queues start with one worker each. A has 10 one-minute jobs and B has 60. How long does B take if it can use A’s worker once A finishes? Move the slider to follow both queues.</p>
 <figure><div class="chart"><img src="figures/pool-eta.svg" alt="Worker 1 runs A until minute 10, then B until minute 35. Worker 2 runs B for 35 minutes. The dashed line extends to B’s fixed-allocation finish at minute 60."><span class="cursor" aria-hidden="true" style="left:14.375%"></span></div></figure>
 <div class="controls"><button id="play" type="button">Play</button><label for="minute">Elapsed time</label><output id="time" for="minute">0 min</output></div>
 <input type="range" id="minute" min="0" max="60" value="0" step="1">
 <p class="status" id="status">A has 10 jobs left. B has 60. Each queue has one worker.</p>
-<p>At minute 10, B has completed ten jobs. Its remaining 50 jobs take 25 minutes on two workers, so its projected finish is minute 35. The dotted extension shows the 60-minute finish if B kept just one worker.</p>
+<p>At minute 10, A finishes and B has 50 jobs left. With both workers, those take another 25 minutes. B finishes at minute 35. The dashed line shows how long B would have taken with one worker for the whole run (60 minutes).</p>
 <script>
 const slider = document.getElementById('minute'), play = document.getElementById('play');
 let timer;

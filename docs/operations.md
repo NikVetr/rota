@@ -2,11 +2,11 @@
 
 ## Inventory
 
-Copy `examples/cluster.json` to `cluster.local.json`. Set `shared_root` to the
-same absolute directory on all machines. Mount it before rendering. Set
-`coordinator` to the ID of the machine with locally attached storage. SSH from
-the coordinator must reach all inventory targets, including the coordinator.
-A host can coordinate even if its worker entry is disabled.
+Copy `examples/cluster.json` to `cluster.local.json`. Set `coordinator` to
+the ID of the machine with the drive attached. Mount that drive at the same
+absolute path (`shared_root`) on every machine before rendering the inventory.
+The coordinator needs SSH access to every target, including itself. You can
+disable its worker and still use it to coordinate the pool.
 
 Each host has an ID, an SSH target, a positive CPU allowance, a positive memory
 allowance in MiB, and an enabled flag. An SSH target can be an alias from
@@ -16,16 +16,19 @@ allowance in MiB, and an enabled flag. An SSH target can be an alias from
 python3 cluster_config.py cluster.local.json
 ```
 
-Run `./doctor cluster.local.json` from the coordinator before deployment or
-when a worker loses access. It checks noninteractive SSH, Python 3.9+, Bash,
-SSH, Perl and shasum. To distinguish the same shared directory from two locally
-writable copies, it writes one random marker on the coordinator, reads it from
-each host, and creates and removes a tiny write probe on each. It removes the
-coordinator marker on completion. Use `--project /absolute/shared/project`
-to test project permissions, `--shards` to require GNU Parallel, or `--json` for
-per-check results. A failed coordinator or enabled worker makes the command exit
-1. Disabled workers are reported separately. Running from another admin host
-tests that host’s SSH routes.
+Run `./doctor cluster.local.json` on the coordinator before deployment, or if
+a worker loses access. Two machines can each have a writable directory with
+the right name and still be looking at different disks. To check, the doctor
+writes a random marker on the coordinator and reads it on each host. It also
+tests a small write on each host, cleans up the probes and coordinator marker,
+and checks noninteractive SSH access and verifies the required tools (Python 3.9+,
+Bash, SSH, Perl and shasum).
+
+Use `--project /absolute/shared/project` to check project permissions,
+`--shards` to check for GNU Parallel, or `--json` for individual results.
+A failed check on the coordinator or an enabled worker gives exit status 1.
+Disabled workers have a separate report. If you run the doctor on another
+admin host, you are testing SSH routes from that machine.
 
 Rendering writes a versioned environment, a hosts file and a resource table
 under the shared root. Source the environment in each admin shell. After an
@@ -73,10 +76,9 @@ Inspect `$batch/done/` and the application’s outputs before increasing concurr
 `--after "$batch"` on a later submission makes it wait for successful completion.
 
 For long-running queues, check the dashboard’s Priority column and choose an
-unused `--schedule_priority` (default 50). Give higher numbers to queues whose
-results you want first. They get first choice of eligible slots as jobs finish.
-Reuse a priority only when you want those queues to share workers and make
-progress together.
+unused `--schedule_priority` (default 50). Give the higher number to the queue
+whose results you want first. It gets first choice of eligible slots as jobs
+finish. Use the same number when you want the queues to share workers.
 
 ## Monitor and recover
 
@@ -89,12 +91,12 @@ changing inventories.
 
 ### Completion estimates
 
-The adaptive queue ETA answers “When would this queue finish with the pool we
-have now?” It measures the time between each successful job’s claim and its
-completion, then uses the scheduler’s allocator to project which queue can use
-each slot as jobs finish. A running job stays on its host. Queue and host
-priorities, worker caps, available CPU and RAM, shared I/O limits, host holds
-and queue dependencies constrain new starts.
+If two queues share a pool, counting the workers each has now can give a poor
+estimate of when either will finish. The adaptive ETA measures successful jobs
+from claim to completion and asks the scheduler’s allocator where it would put
+the next job each time a slot opens. A running job stays on its host. New jobs
+must still fit the available CPU, RAM and shared I/O, and respect queue and host
+priorities, worker caps, host holds and dependencies.
 
 ![Two equal-priority queues share two workers. A finishes in 10 minutes. B then uses both workers and finishes at minute 35, compared with minute 60 on one worker.](figures/pool-eta.svg)
 
@@ -102,12 +104,12 @@ In this example, B has 50 one-minute jobs left when A finishes. Two workers
 finish those jobs in 25 minutes. [Play or step through the timeline](pool-eta.html)
 from a local checkout.
 
-The forecast assumes no new submissions. Pending jobs use the mean runtime of
-up to 128 successful jobs in the queue. A host with at least three sampled
-completions uses its own mean. Running jobs are credited for time already spent.
-For future launches the monitor also includes the typical gap between jobs
-when it observes at least five consecutive same-host refills for that queue.
-Very short jobs may spend as much time waiting for the next launch as computing.
+The forecast assumes no new submissions and gives pending jobs the mean runtime
+of up to 128 successes in their queue. A host with at least three sampled
+completions uses its own mean. A running job gets credit for time already spent.
+For a queue of very short jobs, launching the next job can take as long as
+running it. The monitor includes that gap once it has observed at least five
+consecutive same-host refills for the queue.
 
 For an early estimate, add `--early_eta_sample` to an adaptive submission
 with at least 20 jobs. Its first two ordinary jobs can take an eligible free
@@ -120,16 +122,16 @@ A `?` beside a dashboard ETA or a timing note in Agent Bar flags a change in
 the job mix or a running job that has outlasted the sample. The estimate still
 assumes average remaining jobs. The JSON report includes the mean runtime,
 sample count, measured dispatch gaps and warning.
-An untimed queue can occupy capacity, and a queue with insufficient timing or
-no projected finish shows a blank ETA. If the whole pool snapshot is
+A blank ETA means the monitor lacks timing data or cannot project a finish.
+Jobs from that queue can still occupy slots and affect other forecasts. If the whole pool snapshot is
 unavailable, running rows fall back to the current-allocation estimate.
 
 The desktop collector saves each numeric ETA it observes. To compare the
 first forecast in each quarter of a queue's progress with its completion time,
 run `python3 queue_eta_history.py` on the collector host. Use `--all` for every
 forecast, `--queue <label-or-id>` to filter, or `--json` for timestamps and
-errors in seconds. Positive errors mean a late finish. Open and unsuccessful queues have
-no scored error. The history includes worker counts and timing warnings from
+errors in seconds. A positive error means the queue finished later than forecast. Only queues
+that finish successfully receive a score. The history includes worker counts and timing warnings from
 when each estimate was made, and survives collector restarts.
 
 The shared monitor snapshot carries the pool estimate by default. To compare
@@ -154,14 +156,15 @@ Its running jobs finish. Resume with the same command using `resume`.
 For maintenance, `"$scheduler" pool-drain` stops new admissions across the pool.
 Check `pool-status` until drain completes before updating deployed scripts.
 
-An unreachable worker may still be computing. After an interruption, restore
-storage and connectivity first, inspect queue status, completion markers and
-outputs, and reconcile uncertain jobs before retrying them. If the coordinator
-process exited, record the pool ID from `pool-status` and confirm the original
-process is gone. An active pool can be recovered with the same identity using
+Losing SSH tells you the worker is unreachable. Its job may still be running.
+Restore storage and connectivity, then check the queue status, completion
+markers and outputs. Reconcile any uncertain jobs before retrying them.
+
+If the coordinator exited, get the pool ID from `pool-status` and confirm the
+original process is gone. To recover an active pool under the same ID, use
 `"$scheduler" pool-start --recover-inactive --expected-pool-id "$pool_id"`.
-For a pool already draining, use `pool-drain --recover-inactive` with the
-same expected ID. Run `"$scheduler" --help` for the recovery and audit commands.
+If the pool was already draining, use `pool-drain --recover-inactive` with
+the same expected ID. `"$scheduler" --help` lists the recovery and audit commands.
 
 ## Execution modes
 
@@ -173,8 +176,8 @@ mixed-architecture pool must have compatible job executables and dependencies.
 
 ## Opt-in host and queue features
 
-These change nothing unless the inventory or a submission sets them. Inventory
-settings take effect at the next pool start (drain, render, deploy, start).
+Enable these features in the inventory or when you submit a queue. To apply
+inventory changes, drain the pool, render the inventory, deploy and start the pool.
 
 **Owner activity.** For a machine someone also uses at the keyboard:
 
@@ -183,21 +186,21 @@ settings take effect at the next pool start (drain, render, deploy, start).
  "enabled": true, "owner_idle_seconds": 300, "owner_active": "suspend"}
 ```
 
-Each resource sample, the daemon reads how long the console has been idle: macOS
-`HIDIdleTime`, or the Linux graphical session's logind idle hint. While the
-owner has been idle for less than `owner_idle_seconds` (60–86400), the host starts
-no new jobs, as if it were away. Running jobs continue and stay charged. If the
-idle time cannot be read, including a failed logind query, the host also starts
-nothing (`owner_unknown`).
-Linux desktops set the idle hint only after their own idle delay, which therefore
-acts as a floor on `owner_idle_seconds`.
+At each resource sample, the daemon reads `HIDIdleTime` on macOS or the
+graphical session’s logind idle hint on Linux. If the console has been idle for
+less than `owner_idle_seconds` (60–86400), the host starts no new jobs, just
+as it would if set away. The default `"hold"` lets running jobs continue and
+keeps their reservations. If idle time is unavailable (including a failed
+logind query), the host also holds new starts and reports `owner_unknown`.
+On Linux, the desktop’s own idle delay sets a lower bound on when the daemon
+can observe that the owner has stepped away.
 
-`owner_active: "suspend"` also stops every process of the host's running jobs
-(SIGSTOP) while the owner is active, and continues them (SIGCONT) once the owner
-has been idle long enough. The daemon records the jobs it is about to stop before
-stopping them, so a daemon that exits, crashes or restarts resumes them first. Suspended jobs still hold their memory, their wall time keeps
-counting (so queue ETAs and backfill estimates see longer jobs), and a pool drain
-waits for them. The default `"hold"` never stops a running job.
+With `owner_active: "suspend"`, the daemon also sends SIGSTOP to every process
+in the host’s running jobs. After the owner has been idle long enough, it sends
+SIGCONT. The daemon records which jobs it will stop so it can resume them on
+exit or recover them after a crash or restart. Suspended jobs still hold memory
+and a drain waits for them. Their elapsed time includes the suspension, which
+lengthens the runtimes used for queue ETAs and backfill.
 
 **Devices (GPUs).** Give a host `"gpu_units": 2` and submit with
 `--gpu_units_per_job 1`. Device units are a fourth resource next to CPU, memory and
@@ -218,15 +221,16 @@ with the reason. Sampling is every few seconds, so a fast spike can pass between
 samples. Declared memory remains the admission floor, and `set-memory` refuses a
 floor above the limit.
 
-**Backfill.** With `"backfill": true` at the top level of the inventory, capacity
-held back on a host draining for a large job may run a shorter job when that
-job's 90th-percentile runtime, plus 30 s, ends before the large job could fit. The
+**Backfill.** A host may have a few slots free while it waits for enough jobs
+to finish to admit a large one. Set `"backfill": true` at the top level of the
+inventory to let a shorter job use those slots if its 90th-percentile runtime,
+plus 30 s, fits inside that wait. The
 coordinator measures runtimes from claim and done times of each queue's last 30
 completed jobs, and needs at least 5. It forecasts when the large job fits from
 the 10th-percentile runtimes of the jobs that must finish first. A job without an
 estimate may end at any moment, so it makes the forecast earlier and allows less
-backfill. A backfilled job that runs past its 90th percentile delays the large
-job, which is why backfill is opt-in. `pool-start --backfill 0|1` overrides the
+backfill. A backfilled job that runs longer than the available window can delay the large
+job. Enable backfill when that tradeoff suits the queue. `pool-start --backfill 0|1` overrides the
 rendered default.
 
 **CPU time of finished jobs** is always recorded. Each finished job writes

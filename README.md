@@ -1,28 +1,32 @@
 # ROTA
 
-A lightweight SSH job scheduler for small, trusted macOS/Linux clusters. A rota is a
-schedule of turns; here it is also the **R**esource- and **O**wner-aware **T**ask **A**llocator.
+ROTA runs independent shell jobs on a few trusted Macs and Linux machines that share a drive.
+A rota is a schedule of turns. Here the name also stands for **R**esource- and
+**O**wner-aware **T**ask **A**llocator.
 
 ![Three queues share four hosts. Each square is one CPU unit held by a running job; a higher-priority queue fills slots as other jobs finish.](docs/figures/loop-pool-overview.gif)
 
-Run independent shell jobs with fixed workers, node-local shards, or an adaptive
-pool that shares CPU and memory budgets between queues. Jobs keep running when
-admission is paused; dependencies, failure holds, and audited recovery are explicit.
+Suppose you have two analyses to run and want the results of one before the other.
+Give that queue the higher priority. As jobs finish, the adaptive pool gives it
+first choice of the CPU and memory that free up. The change in priority leaves running jobs alone.
+Give the queues equal priority if you want both to make progress together.
+You can pause new starts, hold a stage until its predecessors succeed, and audit
+failed work before retrying it. If you prefer a fixed allocation, assign workers
+per host or divide the queue into host-local shards.
 
-The scheduler uses Bash, Python's standard library, and filesystem records rather
-than a database. The tmux dashboard supports macOS and Linux CPU/memory sampling,
-queue progress, shared storage, and network/block-device activity.
+ROTA starts workers over SSH and keeps its records in files on the shared drive.
+It uses Bash and Python’s standard library. The tmux dashboard shows queue progress,
+CPU and memory use on each host, and traffic on the network and storage devices.
 
-The [illustrated operations guide](docs/operations.md#submit-your-own-queue)
-traces one job through the scheduler and explains recovery after a worker loses
-contact. Its [ETA walkthrough](docs/operations.md#completion-estimates) shows
-how a queue can finish sooner when another queue releases its workers. See
-[how it compares](docs/comparison.md) with Slurm, Kubernetes, HTCondor and GNU Parallel.
+The [operations guide](docs/operations.md#submit-your-own-queue) follows a job from
+submission to completion, including what to check if its worker loses contact. The [ETA walkthrough](docs/operations.md#completion-estimates)
+shows what happens to the second queue’s forecast when the first finishes.
+For clusters with different requirements, see the [scheduler comparison](docs/comparison.md).
 
 | Priorities | Leases | Forecasts |
 | --- | --- | --- |
 | ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
-| Equal priorities share; a higher one takes each freed slot. No job is stopped. | An unreachable host starts nothing new once its lease runs out; its jobs keep running. | The pool ETA replays the scheduler, so B speeds up when A finishes. |
+| Queues at equal priority share slots. A higher priority takes the next eligible slot. | When a host’s lease expires, its running jobs continue. New starts wait for contact to resume. | With both workers, B finishes at minute 35. |
 
 ## When to use ROTA
 
@@ -43,24 +47,24 @@ flowchart TD
 
 ## Set up another cluster
 
-1. On the storage host (the coordinator), clone this repository with Git and open a Bash
-   shell in the checkout. Deployment records the Git commit and needs a clean
-   working tree. GitHub’s source ZIP omits this metadata. Configure passwordless
-   SSH from the coordinator to every configured target, including itself. The
-   writable drive must have the same absolute path on every host. Install Bash,
-   Python 3.9+, SSH and Perl/shasum. The dashboard
-   also needs tmux. Host-local shards use GNU Parallel.
-2. Copy the [example inventory](examples/cluster.json) to `cluster.local.json`
-   and edit that one file. Set the shared mount path, coordinator ID, each
-   host’s SSH target and its CPU and memory allowances. The scheduler, deployment
+1. Clone this repository with Git on the machine with the shared drive attached
+   (the coordinator). Open a Bash shell in the checkout. Deployment records the
+   commit and requires a clean working tree, so a GitHub source ZIP won’t work.
+   Set up passwordless SSH from the coordinator to every target, including itself.
+   Mount the drive read-write at the same absolute path on every host. Install
+   Bash, Python 3.9+, SSH, Perl and shasum. The dashboard also uses tmux, and
+   host-local shards use GNU Parallel.
+2. Copy the [example inventory](examples/cluster.json) to `cluster.local.json`.
+   Enter the shared mount path and coordinator ID, then give each host an SSH
+   target and CPU and memory allowances. The scheduler, deployment
    tools and dashboard use settings generated from the inventory. Job commands,
    inputs and outputs belong to individual project queues. Keep SSH keys in
    your SSH configuration. Optional settings turn on backfill, GPU units, and
    holding or suspending work while a machine's owner is at the keyboard
    ([opt-in features](docs/operations.md#opt-in-host-and-queue-features)).
-3. From the coordinator, run `./doctor cluster.local.json`. It checks each SSH
-   route, runtime tools, writable storage and a marker shared with the coordinator.
-   Then generate the configuration and activate it in this shell:
+3. From the coordinator, run `./doctor cluster.local.json`. It checks the SSH
+   routes and tools, tests write access, and verifies that each host can read a
+   marker the coordinator wrote. Once it passes, load the configuration in this shell.
 
    ```bash
    env_file=$(python3 cluster_config.py cluster.local.json --render)
@@ -85,12 +89,12 @@ flowchart TD
 
 ### The `rota` command
 
-`rota <command>` is the front door. From a checkout it runs `control` (the JSON
-pool controls Agent Bar uses), `config`, `doctor`, `monitor` and `deploy`. Every
-other command goes to the scheduler on the shared root: `rota submit`,
-`rota pool-status`, `rota pause`, `rota start`, `rota kill`, `rota reconcile`
-and the rest of `rota help-scheduler`. The collector installer below links it
-into `~/.local/bin`; elsewhere, `ln -s "$PWD/rota" ~/.local/bin/rota`.
+Use `rota <command>` from a checkout for `config`, `doctor`, `monitor`, `deploy`
+and `control` (the JSON interface Agent Bar uses). For `rota submit`,
+`rota pool-status`, `rota pause`, `rota start`, `rota kill` and `rota reconcile`,
+the command calls the scheduler on the shared drive. Use `rota help-scheduler`
+for the full list. The collector installer links `rota`
+into `~/.local/bin`. On other machines, use `ln -s "$PWD/rota" ~/.local/bin/rota`.
 
 ### Open the dashboard
 
@@ -104,15 +108,16 @@ a different inventory. [Monitor and recover](docs/operations.md#monitor-and-reco
 
 ## Supported workloads
 
-The scheduler runs independent shell jobs across trusted macOS and Linux
-machines. Each eligible host needs the workload’s dependencies. An unreachable
-worker may still be running its job. Confirm its state before rerunning it.
+Each job runs on one host. If both Macs and Linux machines can claim a job,
+its command, binaries and dependencies must work on both. If a worker drops
+off the network, it may still finish the job. Confirm the job’s state and check its outputs before
+running it again.
 See the [operations guide](docs/operations.md) for placement, monitoring and recovery.
 
 ## Tests
 
 GitHub Actions runs inventory, shell compatibility and ETA tests on Linux and
-macOS. Linux also runs native monitoring and the first-job lifecycle fixture.
+macOS. On Linux, CI also checks native monitoring and runs the first-job example through completion.
 Run the portable suite with `python3 -m unittest discover -s tests` in a quiet
 Linux test environment with tmux installed. The fresh-cluster test starts local scheduler processes and
 uses a fixture in place of SSH.
