@@ -29,9 +29,11 @@ For clusters with different requirements, see the [scheduler comparison](docs/co
 | ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
 | Queues at equal priority share slots. A higher priority takes the next eligible slot. | When a host’s lease expires, its running jobs continue. New starts wait for contact to resume. | A finishes at minute 10. B then gets both workers and finishes at minute 35. |
 
-<a href="https://youtu.be/NRnLCDgYsQw"><img src="docs/figures/explainer-thumbnail.jpg" width="560" alt="How the ROTA scheduler works: a 17-minute narrated video"></a>
+<p align="center"><a href="https://youtu.be/NRnLCDgYsQw"><img src="docs/figures/explainer-thumbnail.jpg" width="100%" alt="How the ROTA scheduler works: a 17-minute narrated video"></a></p>
 
-**[Watch: how the ROTA scheduler works](https://youtu.be/NRnLCDgYsQw)** (17 min). Chapters cover the cluster, the pool, submitting a queue, budgets, deciding who runs, leases, claiming jobs, failures and recovery, operator controls, dependencies, forecasts and the opt-in extensions.
+<p align="center"><b><a href="https://youtu.be/NRnLCDgYsQw">Watch: how the ROTA scheduler works</a></b> (17 min)</p>
+
+Chapters cover the cluster, the pool, submitting a queue, budgets, deciding who runs, leases, claiming jobs, failures and recovery, operator controls, dependencies, forecasts and the opt-in extensions.
 
 ## When to use ROTA
 
