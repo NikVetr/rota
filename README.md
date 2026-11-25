@@ -14,7 +14,8 @@ You can pause new starts, hold a stage until its predecessors succeed, and audit
 failed work before retrying it. If you prefer a fixed allocation, assign workers
 per host or divide the queue into host-local shards.
 
-ROTA starts workers over SSH and keeps its records in files on the shared drive.
+The coordinator reaches each host over SSH. In an adaptive pool, a daemon on
+each host starts its workers locally. ROTA keeps its records on the shared drive.
 It uses Bash and Python’s standard library. The tmux dashboard shows queue progress,
 CPU and memory use on each host, and traffic on the network and storage devices.
 
@@ -26,7 +27,7 @@ For clusters with different requirements, see the [scheduler comparison](docs/co
 | Priorities | Leases | Forecasts |
 | --- | --- | --- |
 | ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
-| Queues at equal priority share slots. A higher priority takes the next eligible slot. | When a host’s lease expires, its running jobs continue. New starts wait for contact to resume. | With both workers, B finishes at minute 35. |
+| Queues at equal priority share slots. A higher priority takes the next eligible slot. | When a host’s lease expires, its running jobs continue. New starts wait for contact to resume. | A finishes at minute 10. B then gets both workers and finishes at minute 35. |
 
 ## When to use ROTA
 

@@ -229,9 +229,9 @@ coordinator measures runtimes from claim and done times of each queue's last 30
 completed jobs, and needs at least 5. It forecasts when the large job fits from
 the 10th-percentile runtimes of the jobs that must finish first. A job without an
 estimate may end at any moment, so it makes the forecast earlier and allows less
-backfill. A backfilled job that runs longer than the available window can delay the large
-job. Enable backfill when that tradeoff suits the queue. `pool-start --backfill 0|1` overrides the
-rendered default.
+backfill. If a shorter job overruns that window, it can delay the large job.
+Enable backfill when that tradeoff suits the pool as a whole.
+`pool-start --backfill 0|1` overrides the rendered default.
 
 **CPU time of finished jobs** is always recorded. Each finished job writes
 `usage/job_<ID>.env` in its batch: user and system CPU seconds of its process
