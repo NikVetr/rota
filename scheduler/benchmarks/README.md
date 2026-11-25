@@ -1,4 +1,4 @@
-# Benchmark suite (Rota)
+# Benchmark suite (ROTA)
 
 This directory contains a mixed-workload benchmark intended to stress-test the queue runner and estimate per-node performance.
 

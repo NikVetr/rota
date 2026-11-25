@@ -1,4 +1,4 @@
-# Rota
+# ROTA
 
 A lightweight SSH job scheduler for small, trusted macOS/Linux clusters. A rota is a
 schedule of turns; here it is also the **R**esource- and **O**wner-aware **T**ask **A**llocator.
@@ -102,5 +102,5 @@ uses a fixture in place of SSH.
 
 ## License
 
-Rota is licensed under the GNU General Public License, version 2
+ROTA is licensed under the GNU General Public License, version 2
 or any later version (SPDX `GPL-2.0-or-later`). See [LICENSE](LICENSE).

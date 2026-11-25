@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rota's front-door command. Checkout tools run from the checkout this script belongs to; every
+# ROTA's front-door command. Checkout tools run from the checkout this script belongs to; every
 # other command goes to the scheduler scripts deployed on the shared root ($ROTA_ROOT).
 set -euo pipefail
 
@@ -33,7 +33,7 @@ EOF
 }
 
 checkout() {
-  [ -e "$HERE/$1" ] || { echo "rota: '$2' runs from a Rota checkout; $HERE/$1 is missing" >&2; exit 2; }
+  [ -e "$HERE/$1" ] || { echo "rota: '$2' runs from a ROTA checkout; $HERE/$1 is missing" >&2; exit 2; }
 }
 
 shared() {
