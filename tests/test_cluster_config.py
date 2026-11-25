@@ -82,7 +82,8 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(shared.exists())
         shared.mkdir()
         env_file = Path(subprocess.check_output(command, text=True).strip())
-        self.assertEqual(env_file.parent.parent, shared / "hosts/config")
+        # Compare resolved paths: on macOS the temporary directory is reached through the /var symlink.
+        self.assertEqual(env_file.resolve().parent.parent, (shared / "hosts/config").resolve())
         self.assertTrue(env_file.is_file())
 
     def test_fallback_addresses_render_ssh_routes(self):
