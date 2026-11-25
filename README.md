@@ -24,6 +24,23 @@ how a queue can finish sooner when another queue releases its workers. See
 | ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
 | Equal priorities share; a higher one takes each freed slot. No job is stopped. | An unreachable host starts nothing new once its lease runs out; its jobs keep running. | The pool ETA replays the scheduler, so B speeds up when A finishes. |
 
+## When to use ROTA
+
+```mermaid
+%%{init: {"themeVariables": {"fontSize": "20px"}, "flowchart": {"nodeSpacing": 30, "rankSpacing": 35, "wrappingWidth": 300}}}%%
+flowchart TD
+    users{{Many users needing isolation,<br/>MPI jobs, or dozens of hosts?}} -- yes --> slurm[Slurm, Flux<br/>or HTCondor]
+    users -- no --> stack{{Containers, the cloud,<br/>or a Python task graph?}}
+    stack -- yes --> k8s[Kubernetes,<br/>Ray or Dask]
+    stack -- no --> list{{A one-off command list,<br/>or no shared drive?}}
+    list -- yes --> parallel[GNU Parallel<br/>or HTCondor]
+    list -- no --> rota[ROTA]
+    %% Invisible links keep the answers in one column beside the questions.
+    slurm ~~~ k8s ~~~ parallel
+```
+
+[How it compares](docs/comparison.md) explains each branch in more detail.
+
 ## Set up another cluster
 
 1. On the storage host (the coordinator), clone this repository with Git and open a Bash
