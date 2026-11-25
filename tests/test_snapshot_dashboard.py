@@ -1,4 +1,4 @@
-"""Launch mmm in snapshot mode on a private tmux server; never use the user's socket."""
+"""Launch the dashboard in snapshot mode on a private tmux server; never use the user's socket."""
 import json
 import os
 from pathlib import Path

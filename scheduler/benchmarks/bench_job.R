@@ -223,7 +223,7 @@ run_stan_sv <- function() {
   data_list <- list(T = T, y = y)
 
   # Compile per-host locally
-  local_build_root <- path.expand("~/repos/cmdstan_models/rota_bench")
+  local_build_root <- path.expand("~/.cache/rota/cmdstan_models/rota_bench")
   build_dir <- file.path(local_build_root, paste0("sv_", hostname))
   lock_dir <- file.path(build_dir, ".compile_lock")
 

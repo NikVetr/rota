@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Sample the cluster once for every dashboard and publish one JSON snapshot.
 
-Runs on the launcher (the Ubuntu desktop) as the rota-collector user service.
+Runs on the Linux dashboard host as the rota-collector user service.
 Each remote host keeps one SSH session running monitor_sample.py, the launcher samples
 itself as a local process, the coordinator's I/O arrives on one monitor_cluster_io.sh --json
-stream, and queues are collected every 30 s. mmm and the desktop top bar render the result
+stream, and queues are collected every 30 s. the tmux dashboard and Agent Bar render the result
 without connecting to any host. Apart from the hosts file (read with a timeout and cached
 locally), nothing on the shared volume is read from this host. The largest processes that
 samplers report while a host's swap is high are appended to a bounded local event log, and

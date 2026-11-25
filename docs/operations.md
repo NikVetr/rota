@@ -126,7 +126,7 @@ A blank ETA means the monitor lacks timing data or cannot project a finish.
 Jobs from that queue can still occupy slots and affect other forecasts. If the whole pool snapshot is
 unavailable, running rows fall back to the current-allocation estimate.
 
-The desktop collector saves each numeric ETA it observes. To compare the
+The status collector saves each numeric ETA it observes. To compare the
 first forecast in each quarter of a queue's progress with its completion time,
 run `python3 queue_eta_history.py` on the collector host. Use `--all` for every
 forecast, `--queue <label-or-id>` to filter, or `--json` for timestamps and

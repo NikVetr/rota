@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render mmm panes from the cluster status collector's snapshot instead of sampling hosts.
+"""Render dashboard panes from the cluster status collector's snapshot instead of sampling hosts.
 
 Subcommands: `memory` draws one host's MEM pane; `mount`, `io` and `queue-status` print what
 monitor_mount_status.sh, monitor_cluster_io.sh and monitor_queue_pane.sh need in snapshot mode.
