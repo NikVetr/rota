@@ -2266,7 +2266,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertFalse(registration.exists())
         self.assertEqual(self.env_value(status, "lifecycle"), "COMPLETED")
         # The retired index still leads readers to the final status and its CPU totals.
-        retired = self.state / "retired" / f"{self.queue_id}.env"
+        retired = self.state.parent / "retired-queues" / f"{self.queue_id}.env"
         self.assertEqual(self.env_value(retired, "batch_dir"), str(self.batch))
         self.assertIn("jobs_with_usage=", status.read_text())
 

@@ -2115,9 +2115,10 @@ class Coordinator:
                 raise SnapshotError(f"cannot release scheduler transition lock: {error}") from error
 
     def _index_retired(self, registration: dict[str, str]) -> None:
-        """Point at a retiring queue's batch, whose status.env keeps its final totals. Reporting
-        only: a failure is logged and never blocks retirement."""
-        retired = self.state_root / "retired"
+        """Point at a retiring queue's batch, whose status.env keeps its final totals. The index
+        sits beside the pool state, which a drain archives, so it outlives pools. Reporting only:
+        a failure is logged and never blocks retirement."""
+        retired = self.state_root.parent / "retired-queues"
         now = time.time()
         try:
             retired.mkdir(exist_ok=True)

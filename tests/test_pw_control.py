@@ -238,7 +238,20 @@ class SnapshotTests(unittest.TestCase):
             scheduler = Path(directory) / "adaptive_scheduler.sh"
             scheduler.write_text("Commands:\n  pool-drain [--x]\n  set-host-budget --host_id\n")
             state = snapshot_module.snapshot(root, scheduler)
+            with (root / "pool.env").open("a") as stream:
+                stream.write("backfill=1\n")
+            with (batch / "adaptive/resources.env").open("a") as stream:
+                stream.write("gpu_units_per_job=2\nmemory_limit_mib=2048\n")
+            with (batch / "adaptive/status.env").open("a") as stream:
+                stream.write("running_by_host=node1:1,node2:0\n")
+            configured = snapshot_module.snapshot(root, scheduler)
         self.assertEqual(state["pool"]["id"], "p1")
+        self.assertFalse(state["pool"]["backfill"])
+        self.assertTrue(configured["pool"]["backfill"])
+        gpu_queue = configured["queues"][1]
+        self.assertEqual(gpu_queue["gpu_units_per_job"], 2)
+        self.assertEqual(gpu_queue["memory_limit_mib"], 2048)
+        self.assertEqual(gpu_queue["running_by_host"], {"node1": 1, "node2": 0})
         self.assertTrue(state["pool"]["coordinator_live"])
         self.assertEqual((state["pool"]["away_hosts"], state["pool"]["unavailable_hosts"]),
                          (["node2"], {"node1": "telemetry_or_share"}))
@@ -248,6 +261,9 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((node2["away"], node2["away_window"]["reason"]), (True, "trip"))
         broken, queue = state["queues"]
         self.assertIn("error", broken)
+        self.assertEqual(queue["gpu_units_per_job"], 0)
+        self.assertIsNone(queue["memory_limit_mib"])
+        self.assertIsNone(queue["running_by_host"])
         self.assertEqual((queue["tag"], queue["project"], queue["submitted_by"], queue["share_interrupted_jobs"]),
                          ("tag1", "proj", "codex:x", 2))
         self.assertEqual(queue["control"]["host_priorities"], {"node5": "off", "node1": 10})
@@ -260,7 +276,7 @@ class SnapshotTests(unittest.TestCase):
     def test_retired_queues_keep_their_final_usage_for_a_week(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "adaptive"
-            (root / "retired").mkdir(parents=True)
+            (root.parent / "retired-queues").mkdir(parents=True)
             now = int(time.time())
             for name, retired in (("q0", now - 60), ("old", now - 8 * 86400)):
                 batch = Path(directory) / name
@@ -268,7 +284,7 @@ class SnapshotTests(unittest.TestCase):
                 (batch / "adaptive/status.env").write_text(
                     "lifecycle=COMPLETED\njobs_with_usage=3\ncpu_seconds_succeeded=7200.0\n"
                     "cpu_seconds_failed=36.0\nusage_state=ok\n")
-                (root / "retired" / f"{name}.env").write_text(
+                (root.parent / "retired-queues" / f"{name}.env").write_text(
                     f"queue_id={name}\ntag_clean=tag-{name}\nbatch_dir={batch}\nretired_epoch={retired}\n")
             state = snapshot_module.snapshot(root, Path(directory) / "missing.sh")
         retired, = state["retired_queues"]

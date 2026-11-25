@@ -235,4 +235,5 @@ tree, wall seconds and exit code. The job log ends with a `CPU:` line. Adaptive
 queue status reports `cpu_seconds_succeeded`, `cpu_seconds_failed` and
 `jobs_with_usage`. The dashboard snapshot (`cluster-status.json`) reports them
 as CPU-hours in each queue row's `usage`. A finished queue keeps its final totals
-there for a week, from the coordinator's `retired/` index.
+there for a week, across drains, from the coordinator's index in
+`.parallel-workers/retired-queues/` beside the pool state.

@@ -55,6 +55,19 @@ def host_priorities(text):
     return result
 
 
+def running_by_host(text):
+    """Reported reservations per host, or None before the first queue status."""
+    if not text:
+        return None
+    counts = {}
+    for item in text.split(","):
+        host, _, count = item.partition(":")
+        if not host or host in counts or not count.isdecimal():
+            raise ValueError(f"invalid running_by_host entry: {item!r}")
+        counts[host] = int(count)
+    return counts
+
+
 def hosts_section(root, pool, now):
     with open(pool["resources_file"], newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
@@ -94,7 +107,8 @@ def usage_summary(status):
 def retired_queues(root, now):
     """Queues retired within RETIRED_SECONDS, with their final lifecycle and usage."""
     result = []
-    for path in sorted((root / "retired").glob("*.env")):
+    # Beside the pool state, so queues retired before a drain stay listed in the next pool.
+    for path in sorted((root.parent / "retired-queues").glob("*.env")):
         try:
             entry = read_env(path)
             retired = int(entry["retired_epoch"])
@@ -124,6 +138,9 @@ def queue_entry(registration):
         "submitted_by": meta.get("submitted_by") or None,
         "lifecycle": status.get("lifecycle"), "blocking_reason": status.get("blocking_reason"),
         "running_workers": integer(status.get("running_workers"), 0),
+        "running_by_host": running_by_host(status.get("running_by_host")),
+        "gpu_units_per_job": int(resources.get("gpu_units_per_job", 0)),
+        "memory_limit_mib": int(resources["memory_limit_mib"]) if "memory_limit_mib" in resources else None,
         "target_workers": integer(status.get("target_workers"), 0),
         "share_interrupted_jobs": integer(status.get("share_interrupted_jobs"), 0),
         "usage": usage_summary(status),
@@ -222,6 +239,7 @@ def snapshot(root, scheduler):
         "schema": SCHEMA, "updated": round(now, 3),
         "pool": {
             "id": pool["pool_id"], "name": pool.get("pool_name"), "state": pool["state"],
+            "backfill": pool.get("backfill", "0") == "1",
             "coordinator_live": live, "coordinator_updated": updated or None,
             "away_hosts": list(filter(None, ready.get("away_hosts", "").split(","))),
             "unavailable_hosts": dict(item.split(":", 1) for item in

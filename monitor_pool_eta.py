@@ -10,7 +10,7 @@ from pathlib import Path
 from statistics import mean
 import sys
 import time
-from typing import Any
+from typing import Any, Optional
 
 from monitor_queue_eta import claim_host, current_eta, residual, sample_jobs
 from scheduler_snapshot import hosts_section, host_priorities, read_env
@@ -25,6 +25,9 @@ class Queue:
     depends: set = field(default_factory=set)
     succeeds: bool = True
     dispatch_seconds: dict = field(default_factory=dict)
+    # With backfill, the coordinator's p10 runtime: a running job is expected to release its
+    # resources p10 seconds after it started. None (fewer than five samples) means unknown.
+    release_p10: Optional[float] = None
 
     def duration(self, host):
         return self.host_seconds.get(host, self.typical) + self.dispatch_seconds.get(host, 0)
@@ -36,6 +39,7 @@ class Slot:
     queue: str
     finish: float
     memory: int
+    started: float = math.nan  # simulated start time; NaN when unknown
 
 
 def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity, early_waiters=()):
@@ -133,12 +137,16 @@ def skip_stable_refills(queues, pending, slots, counts, targets, contested, now)
             duration = queues[s.queue].duration(s.host)
             n = min(pending[s.queue], math.ceil((horizon - s.finish) / duration))
             s.finish += n * duration
+            if n:
+                s.started = s.finish - duration
             pending[s.queue] -= n
 
 
 def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadline=math.inf, backfill=False):
     """Discrete finishes, bulk-refilling unchanged slots across long backlogs. With backfill, each
-    plan sees the simulated slots' finish times as the hosts' release estimates."""
+    plan sees release estimates built as the coordinator builds them: p10 minus the time a job has
+    run, omitted (so treated as releasable now) without a p10. Mean runtimes still drive the
+    simulated finishes."""
     # Unknown runtimes occupy their placement indefinitely. Other hosts/queues
     # can still yield a forecast without guessing when those workers will free up.
     pending = {q: item.pending for q, item in queues.items()}
@@ -147,7 +155,7 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
     live = set(queues)
     completed = set()
     finish = {}
-    slots = [Slot(s.host, s.queue, s.finish, s.memory) for s in slots]
+    slots = [Slot(s.host, s.queue, s.finish, s.memory, s.started) for s in slots]
     now = 0.0
     replan = True
     targets = {}
@@ -181,8 +189,9 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
             if backfill:
                 releases = defaultdict(list)
                 for s in slots:
-                    if math.isfinite(s.finish):
-                        releases[s.host].append([max(0, math.ceil(s.finish - now)),
+                    p10 = queues[s.queue].release_p10
+                    if p10 is not None and math.isfinite(s.started):
+                        releases[s.host].append([max(0, int(p10 - (now - s.started))),
                                                  queues[s.queue].profile["cpu_units_per_job"], s.memory])
                 plan_hosts = [dict(h, release_estimates=sorted(releases[h["host_id"]])) for h in hosts]
                 policy = {"backfill": True}
@@ -196,7 +205,7 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
                 for q, target in rows.items():
                     add = min(pending[q], max(0, target - counts[h, q]))
                     for _ in range(add):
-                        slots.append(Slot(h, q, now + queues[q].duration(h), queues[q].profile["memory_mib_per_job"]))
+                        slots.append(Slot(h, q, now + queues[q].duration(h), queues[q].profile["memory_mib_per_job"], now))
                     pending[q] -= add
                     counts[h, q] += add
             # Reallocate on the next sample finish, or on the next release that
@@ -226,6 +235,7 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
                         and s.memory == queues[s.queue].profile["memory_mib_per_job"]
                         and counts[s.host, s.queue] <= targets[s.host][s.queue]):
                     s.finish = now + queues[s.queue].duration(s.host)
+                    s.started = now
                     s.memory = queues[s.queue].profile["memory_mib_per_job"]
                     pending[s.queue] -= 1
                 else:
@@ -313,9 +323,9 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
                        host_priorities=host_priorities(status.get("host_priorities")), admission="enabled" if enabled else "paused")
         if int(res.get("gpu_units_per_job", 0)):
             profile["gpu_units_per_job"] = int(res["gpu_units_per_job"])
-        runtime = backfill_runtime(batch) if backfill_runtime else None
-        if runtime is not None:
-            profile["backfill_runtime_seconds"] = runtime
+        estimate = backfill_runtime(batch) if backfill_runtime else None
+        if estimate is not None:
+            profile["backfill_runtime_seconds"] = estimate[0]
         meta = read_env(batch / "run_meta.env")
         if meta["run_token"] != q or meta["pool_id"] != pool["pool_id"]:
             raise ValueError("queue run metadata changed")
@@ -330,9 +340,10 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
         rates = {h: mean(v) for h, v in times.by_host.items() if len(v) >= 3}
         queue = Queue(profile, pending, typical, rates, depends,
                       succeeds=times.done + pending + count == total and not int(status.get("share_interrupted_jobs", 0)),
-                      dispatch_seconds={h: gap for h, (gap, _) in times.dispatch.items()})
+                      dispatch_seconds={h: gap for h, (gap, _) in times.dispatch.items()},
+                      release_p10=estimate[1] if estimate is not None else None)
         queues[q] = queue
-        residuals = defaultdict(list)
+        residuals, ages = defaultdict(list), defaultdict(list)
         oldest_age = 0
         if len(times.active) == count and times.durations:
             for name in times.active:
@@ -344,13 +355,15 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
                     samples = times.by_host[h] if h in rates else times.durations
                     left = residual(samples, age, not pending)
                     residuals[h].append(left if left is not None else math.inf)
+                    ages[h].append(age)
         current = current_eta(batch, pending + count, count, now, times, occupied)
         for h, n in occupied.items():
             ends = residuals[h] if len(residuals[h]) == n else [math.inf if not pending and current is None else rates.get(h, typical)] * n
             charge = charges[h, q]
+            started = [-age for age in ages[h]] if len(ages[h]) == n else [math.nan] * n
             for i, end in enumerate(ends):
                 slots.append(Slot(h, q, end if h in reachable else math.inf,
-                                  max(memory, charge[i]) if i < len(charge) else memory))
+                                  max(memory, charge[i]) if i < len(charge) else memory, started[i]))
         rows[q] = {"batch": str(batch), "allocation_eta_sec": seconds(current), "pool_eta_sec": None,
                    "sample_jobs": len(times.durations), "mean_runtime_sec": typical if times.durations else None,
                    "dispatch_by_host": {h: {"seconds": gap, "pairs": pairs} for h, (gap, pairs) in times.dispatch.items()},
@@ -384,12 +397,15 @@ def main():
         backfill = pool.get("backfill") == "1"
         runtime = None
         if backfill:
-            # The coordinator's own estimate: p90 of the queue's recent successful runtimes.
+            # The coordinator's own estimates from the queue's recent successful runtimes: p90 for
+            # eligibility, p10 for when running jobs release their resources.
             from adaptive_coordinator import BACKFILL_MIN_SAMPLES, job_timing, nearest_rank  # type: ignore[reportMissingImports]
 
             def backfill_runtime(batch):
                 durations = job_timing(batch / "claims", batch / "done", {})["durations"]
-                return math.ceil(nearest_rank(durations, 0.9)) if len(durations) >= BACKFILL_MIN_SAMPLES else None
+                if len(durations) < BACKFILL_MIN_SAMPLES:
+                    return None
+                return math.ceil(nearest_rank(durations, 0.9)), nearest_rank(durations, 0.1)
             runtime = backfill_runtime
         queues, slots, rows = queue_snapshot(root, pool, now, lease, hosts, charges, dependency_hold, runtime)
         cursor_path = root / "cursor.json"

@@ -133,19 +133,24 @@ class PoolEtaTests(unittest.TestCase):
         self.assertEqual(forecast([host(cpu=4, gpu_units=1)], {"A": jobs}, [], 4, allocate), {"A": 720})
 
     def test_backfill_replay_lets_short_jobs_use_capacity_held_for_a_large_job(self):
-        def queues():
+        def queues(blocker_p10):
             large = queue(1, 60, priority=90)
             large.profile["cpu_units_per_job"] = 2
-            small = queue(10, 60)
+            small = queue(10, 60, release_p10=60)
             small.profile["backfill_runtime_seconds"] = 60
-            return {"L": large, "S": small}
-        running = [Slot("node", "S", 600, 100)]
-        held = forecast([host()], queues(), running, 4, allocate)
-        backfilled = forecast([host()], queues(), running, 4, allocate, backfill=True)
+            # W's running job blocks L until it ends at 600 s; the coordinator expects its release
+            # from W's p10, not from the mean that drives the simulated finish.
+            return {"L": large, "S": small, "W": queue(0, 600, release_p10=blocker_p10)}
+        running = [Slot("node", "W", 600, 100, started=0)]
+        held = forecast([host()], queues(600), running, 4, allocate)
+        backfilled = forecast([host()], queues(600), running, 4, allocate, backfill=True)
         # Held: S waits for L (600-660), then runs two at a time. Backfilled: S uses the held CPU
         # while 60 s + 30 s margin still ends before L could start, leaving one job for after L.
-        self.assertEqual(held, {"L": 660, "S": 960})
-        self.assertEqual(backfilled, {"L": 660, "S": 720})
+        self.assertEqual(held, {"W": 600, "L": 660, "S": 960})
+        self.assertEqual(backfilled, {"W": 600, "L": 660, "S": 720})
+        # A p10 far below the mean (10, 10, 10, 10, 560 s: mean 120) promises an early release, so
+        # the coordinator would backfill nothing; neither does the forecast.
+        self.assertEqual(forecast([host()], queues(10), running, 4, allocate, backfill=True), held)
 
     def test_large_backlog_skips_equivalent_waves(self):
         self.assertEqual(forecast([host()], {"A":queue(1_000_001)}, [], 2, allocate), {"A":500001*60})
