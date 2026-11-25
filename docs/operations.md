@@ -102,11 +102,17 @@ In this example, B has 50 one-minute jobs left when A finishes. Two workers
 finish those jobs in 25 minutes. [Play or step through the timeline](pool-eta.html)
 from a local checkout.
 
-The forecast samples up to 128 successful jobs per queue. A host with at least
-three sampled completions uses its own mean for that workload. Other hosts use
-the queue mean. For a running job the monitor also considers how long it has
-already run. Queued time contributes no work. New submissions, future host
-changes, startup delays and changes in job mix can move the estimate.
+The forecast assumes no new submissions. Pending jobs use the mean runtime of
+up to 128 successful jobs in the queue. A host with at least three sampled
+completions uses its own mean. Running jobs are credited for time already spent.
+For future launches the monitor also includes the typical gap between jobs
+when it observes at least five consecutive same-host refills for that queue.
+Very short jobs may spend as much time waiting for the next launch as computing.
+
+A `?` beside a dashboard ETA or a timing note in Agent Bar flags a change in
+the job mix or a running job that has outlasted the sample. The estimate still
+assumes average remaining jobs. The JSON report includes the mean runtime,
+sample count, measured dispatch gaps and warning.
 An untimed queue can occupy capacity, and a queue with insufficient timing or
 no projected finish shows a blank ETA. If the whole pool snapshot is
 unavailable, running rows fall back to the current-allocation estimate.

@@ -1,9 +1,10 @@
+import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from monitor_queue_eta import shared_eta, shard_eta
+from monitor_queue_eta import current_eta, sample_jobs, shared_eta, shard_eta
 
 
 class QueueEtaTests(unittest.TestCase):
@@ -43,6 +44,43 @@ class QueueEtaTests(unittest.TestCase):
         (self.batch / "done" / "job_legacy.done").touch()
         self.job("invalid", 200, 100)
         self.assertIsNone(shared_eta(self.batch, 10, 2, 900))
+
+    def test_dispatch_requires_a_series_of_adjacent_serial_reservations(self):
+        def observed(serial, start, end):
+            self.job(str(serial), start, end)
+            claim = self.batch / "claims" / f"job_{serial}.claim"
+            (claim / "owner.json").write_text(json.dumps({"reservation_id": f"pool.node.{serial}"}))
+            os.utime(claim, (start, start))
+
+        for serial in range(6):
+            observed(serial, 100 + serial * 15, 107 + serial * 15)
+        # A hold, an intervening reservation, and overlapping jobs are not refills.
+        observed(6, 800, 810)
+        observed(8, 815, 825)
+        observed(9, 817, 827)
+        observed(10, 830, None)
+        times = sample_jobs(self.batch, 832, "pool")
+        self.assertEqual(times.dispatch, {"node": (8, 5)})
+        unchanged_tail = current_eta(self.batch, 1, 1, 832, times)
+        self.assertEqual(unchanged_tail, current_eta(self.batch, 1, 1, 832, times, {"node": 1}))
+        baseline = current_eta(self.batch, 3, 1, 832, times)
+        corrected = current_eta(self.batch, 3, 1, 832, times, {"node": 1})
+        assert baseline is not None and corrected is not None
+        self.assertAlmostEqual(corrected - baseline, 16)
+        self.assertFalse(sample_jobs(self.batch, 832, "different-pool").dispatch)
+
+    def test_recent_claim_window_includes_unfinished_work_without_changing_the_mean(self):
+        queue = []
+        for i in range(130):
+            queue.append(f"{i} run\n")
+            self.job(str(i), 100 + i, 110 + i if i < 100 else None)
+        source = "".join(queue)
+        (self.batch / "queue-edit.txt").write_text(source)
+        (self.batch / "claim-cursor.json").write_text(json.dumps({"offset": len(source), "previous_job_id": "129"}))
+        times = sample_jobs(self.batch, 500, "pool")
+        self.assertEqual(times.durations, [10] * 100)
+        self.assertEqual(times.warning(500, 30), "recent_slower")
+        self.assertEqual(times.warning(500, 0), "")
 
     def test_fixed_shards_finish_on_the_slowest_host(self):
         (self.batch / "run_meta.env").write_text(

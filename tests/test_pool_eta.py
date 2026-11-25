@@ -32,6 +32,13 @@ class PoolEtaTests(unittest.TestCase):
         running = [Slot("node", q, 60, 100) for q in jobs]
         self.assertEqual(forecast([host()], jobs, running, 2, allocate), {"A": 600, "B": 2100})
 
+    def test_only_future_jobs_pay_measured_dispatch_on_their_host(self):
+        q = queue(2, 7, dispatch_seconds={"node": 8})
+        running = [Slot("node", "A", 3, 100)]
+        self.assertEqual(forecast([host(cpu=1)], {"A": q}, running, 1, allocate), {"A": 33})
+        self.assertEqual(forecast([host("other", cpu=1)], {"A": q}, [], 1, allocate), {"A": 14})
+        self.assertEqual(forecast([host()], {"A": queue(3, math.inf)}, [], 2, allocate), {})
+
     def test_coordinator_snapshot_reaches_both_reported_estimates(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)

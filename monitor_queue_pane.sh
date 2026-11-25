@@ -143,7 +143,9 @@ publish_snapshot() {
   local export_dir export_tmp=""
   export_dir="$(dirname "$SNAPSHOT_EXPORT")"
   if mkdir -p "$export_dir" && export_tmp="$(mktemp "$export_dir/.queue-progress.XXXXXX")" \
-      && cp "$data_file" "$export_tmp" && mv -f "$export_tmp" "$SNAPSHOT_EXPORT"; then
+      && cp "$data_file" "$export_tmp" && mv -f "$export_tmp" "${SNAPSHOT_EXPORT}.details" \
+      && export_tmp="$(mktemp "$export_dir/.queue-progress.XXXXXX")" \
+      && cut -f1-21 "$data_file" > "$export_tmp" && mv -f "$export_tmp" "$SNAPSHOT_EXPORT"; then
     return 0
   fi
   [ -z "$export_tmp" ] || rm -f "$export_tmp"
@@ -224,7 +226,7 @@ collect_snapshot() {
   : > "$error_file"
   "$COLLECT_SCRIPT" --root "$ROOT" --collector_script "$COLLECTOR_SCRIPT" --worker_script "$WORKER_SCRIPT" \
     --hosts "$HOSTS" --fallback_host "$FALLBACK_HOST" --mode "$MODE" --limit "$LIMIT" \
-    --timeout_sec "$COLLECTOR_TIMEOUT_SEC" > "$data_next" 2>> "$error_file"
+    --timeout_sec "$COLLECTOR_TIMEOUT_SEC" --eta_warnings > "$data_next" 2>> "$error_file"
   [ -s "$data_next" ]
 }
 
@@ -252,6 +254,10 @@ watch_collector_snapshot() {
   while ! pane_retired; do
     if [ -s "$SNAPSHOT_TSV" ] && { [ ! -s "$data_file" ] || [ "$SNAPSHOT_TSV" -nt "$data_file" ]; }; then
       cp "$SNAPSHOT_TSV" "$data_file"
+      if [ -r "${SNAPSHOT_TSV}.details" ] && cp "${SNAPSHOT_TSV}.details" "$data_next" \
+          && cut -f1-21 "$data_next" | cmp -s - "$data_file"; then
+        mv -f "$data_next" "$data_file"
+      fi
       render_and_redraw "QUEUE PROGRESS | Updated $(date -r "$SNAPSHOT_TSV" '+%Y/%m/%d %H:%M:%S')"
       status_due=0
     fi

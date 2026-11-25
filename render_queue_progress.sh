@@ -425,6 +425,7 @@ END {
     elapsed = dur(value[r, 10] + 0)
     eta_end = end_short
     if (group == 0) eta_end = ((state == "RUNNING" || state == "DRAINING" || state == "PENDING") && value[r, 11] + 0 >= 0 ? dur(value[r, 11] + 0) : "")
+    if (group == 0 && eta_end != "" && value[r, 22] ~ /^(recent_slower|recent_faster|long_running)$/) eta_end = eta_end "?"
     state_txt = "[" (state == "FINISHED_INCOMPLETE" ? "INCOMPLETE" : state) "]"
     row = row_text(value[r, 6], project_value[r], workers, priority_value[r], admission_value[r], start_short, progress, complete, elapsed, eta_end, state_txt)
 

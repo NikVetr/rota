@@ -155,6 +155,8 @@ class QueueTests(unittest.TestCase):
                          (24, None, None, 900, None))
         self.assertEqual((done["group"], done["ended"], done["admission"]), ("recent", 1793746678, "EMPTY"))
         self.assertEqual(collector.parse_queue_rows("Queue Progress: no batch logs found.\n"), [])
+        flagged, = collector.parse_queue_rows("\t".join([*ACTIVE, "recent_slower"]))
+        self.assertEqual(flagged["eta_warning"], "recent_slower")
         with self.assertRaisesRegex(ValueError, "expected 21"):
             collector.parse_queue_rows("\t".join(ACTIVE[:18]) + "\n")
 
@@ -284,10 +286,10 @@ class CollectorTests(unittest.TestCase):
             leftover = subprocess.run(["pgrep", "-f", str(binary / "ssh")], capture_output=True, text=True)
             self.assertEqual(leftover.stdout, "", "a stream outlived the collector")
             self.assertFalse((base / "xdg").exists(), "explicit output paths were ignored")
-            for name in ("cluster-status.json", "queues.tsv", "hosts.txt", "events.jsonl.state.json"):
+            for name in ("cluster-status.json", "queues.tsv", "queues.tsv.details", "hosts.txt", "events.jsonl.state.json"):
                 self.assertEqual(stat.S_IMODE((state / name).stat().st_mode), 0o600, name)
             self.assertEqual(sorted(path.name for path in state.iterdir()),
-                             ["cluster-status.json", "events.jsonl.state.json", "hosts.txt", "queues.tsv"],
+                             ["cluster-status.json", "events.jsonl.state.json", "hosts.txt", "queues.tsv", "queues.tsv.details"],
                              "a temporary file was left behind")
             self.assertEqual((state / "queues.tsv").read_text(), TSV)
             snapshot = json.loads((state / "cluster-status.json").read_text())
@@ -337,11 +339,14 @@ class CollectorTests(unittest.TestCase):
     def test_collect_command_matches_the_queue_pane(self):
         with tempfile.TemporaryDirectory() as directory:
             log, tsv = Path(directory) / "log", Path(directory) / "rows.tsv"
-            tsv.write_text(TSV)
+            out = Path(directory) / "out.tsv"
+            detailed = "\n".join(row + "\t" + warning for row, warning in
+                                  zip(TSV.splitlines(), ("recent_slower", "-", "-"))) + "\n"
+            tsv.write_text(detailed)
             fake = Path(directory) / "collect.sh"
             fake.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$LOG"\ncat "$TSV"\n')
             fake.chmod(0o755)
-            args = type("Args", (), dict(root="/srv/cluster", queue_snapshot=Path(directory) / "out.tsv",
+            args = type("Args", (), dict(root="/srv/cluster", queue_snapshot=out,
                                          no_queue_registry=False))()
             instance = collector.Collector(args)
             instance.hosts = [{"target": "u@a"}, {"target": "u@b"}]
@@ -350,12 +355,16 @@ class CollectorTests(unittest.TestCase):
                     patch.dict(os.environ, LOG=str(log), TSV=str(tsv)):
                 fake.rename(Path(directory) / "monitor_queue_collect.sh")
                 instance.collect_queues()
+            self.assertEqual(out.read_text(), TSV)
+            self.assertEqual(out.with_suffix(".tsv.details").read_text(), detailed)
+            assert instance.queues is not None
+            self.assertEqual(instance.queues[0]["eta_warning"], "recent_slower")
             arguments = log.read_text().splitlines()
         self.assertEqual(arguments, ["--root", "/srv/cluster", "--collector_script",
                                      f"{directory}/monitor_queue_progress.sh", "--worker_script",
                                      f"{directory}/monitor_queue_workers.sh", "--hosts", "u@a u@b",
                                      "--fallback_host", "u@192.0.2.8", "--mode", "remote", "--limit", "0",
-                                     "--timeout_sec", "120"])
+                                     "--timeout_sec", "120", "--eta_warnings"])
         self.assertEqual(instance.queue_refresh["ok"], True)
         self.assertEqual(len(instance.queues), 3)
 

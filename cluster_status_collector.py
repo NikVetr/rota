@@ -263,8 +263,8 @@ def parse_queue_rows(text):
     queues = []
     for line in text.splitlines():
         fields = line.split("\t")
-        if len(fields) != QUEUE_FIELDS:
-            raise ValueError(f"queue row has {len(fields)} columns, expected {QUEUE_FIELDS}: {line[:120]!r}")
+        if len(fields) not in (QUEUE_FIELDS, QUEUE_FIELDS + 1):
+            raise ValueError(f"queue row has {len(fields)} columns, expected {QUEUE_FIELDS} or {QUEUE_FIELDS + 1}: {line[:120]!r}")
         group, state = QUEUE_GROUPS[fields[0]], fields[4]
         label = re.fullmatch(r"(.*) \[b([0-9]+)\]", fields[5])
         eta = int(fields[10])
@@ -276,6 +276,8 @@ def parse_queue_rows(text):
              "ended": int(fields[13]) if group != "active" else None, "failed": int(fields[18]),
              "failed_at": fields[19] or None, "rerun": int(fields[20]), "path": fields[15]},
             **parse_workers(fields[6], state)))
+        if len(fields) > QUEUE_FIELDS and fields[21] != "-":
+            queues[-1]["eta_warning"] = fields[21]
     return queues
 
 
@@ -470,7 +472,7 @@ class Collector:
                    "--collector_script", str(SCRIPT_DIR / "monitor_queue_progress.sh"),
                    "--worker_script", str(SCRIPT_DIR / "monitor_queue_workers.sh"), "--hosts", targets,
                    "--fallback_host", coordinator, "--mode", "local" if is_local(coordinator) else "remote",
-                   "--limit", "0", "--timeout_sec", str(QUEUE_TIMEOUT_SEC)]
+                   "--limit", "0", "--timeout_sec", str(QUEUE_TIMEOUT_SEC), "--eta_warnings"]
         if self.args.no_queue_registry:
             command.append("--no_registry")
         attempted, error, queues = round(time.time(), 3), None, None
@@ -493,7 +495,12 @@ class Collector:
                 except (KeyError, ValueError) as failure:
                     error = f"unreadable queue rows: {failure}"
                 else:
-                    atomic_write(self.args.queue_snapshot, output)
+                    # Publish details first. Existing readers watch the canonical
+                    # 21-column file; its replacement signals a completed refresh.
+                    legacy = "\n".join("\t".join(line.split("\t")[:QUEUE_FIELDS])
+                                       for line in output.splitlines()) + "\n"
+                    atomic_write(Path(str(self.args.queue_snapshot) + ".details"), output)
+                    atomic_write(self.args.queue_snapshot, legacy)
         with self.lock:
             if error:
                 if self.queue_refresh["ok"] is not False:

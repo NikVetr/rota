@@ -24,9 +24,10 @@ class Queue:
     host_seconds: dict = field(default_factory=dict)
     depends: set = field(default_factory=set)
     succeeds: bool = True
+    dispatch_seconds: dict = field(default_factory=dict)
 
     def duration(self, host):
-        return self.host_seconds.get(host, self.typical)
+        return self.host_seconds.get(host, self.typical) + self.dispatch_seconds.get(host, 0)
 
 
 @dataclass
@@ -287,26 +288,32 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
         typical = mean(times.durations) if times.durations else math.inf
         rates = {h: mean(v) for h, v in times.by_host.items() if len(v) >= 3}
         queue = Queue(profile, pending, typical, rates, depends,
-                      succeeds=times.done + pending + count == total and not int(status.get("share_interrupted_jobs", 0)))
+                      succeeds=times.done + pending + count == total and not int(status.get("share_interrupted_jobs", 0)),
+                      dispatch_seconds={h: gap for h, (gap, _) in times.dispatch.items()})
         queues[q] = queue
         residuals = defaultdict(list)
+        oldest_age = 0
         if len(times.active) == count and times.durations:
             for name in times.active:
                 claim = batch / "claims" / name
                 h = claim_host(claim, pool["pool_id"])
                 if h is not None:
                     age = max(0, now - claim.stat().st_mtime)
+                    oldest_age = max(oldest_age, age)
                     samples = times.by_host[h] if h in rates else times.durations
                     left = residual(samples, age, not pending)
                     residuals[h].append(left if left is not None else math.inf)
-        current = current_eta(batch, pending + count, count, now, times)
+        current = current_eta(batch, pending + count, count, now, times, occupied)
         for h, n in occupied.items():
-            ends = residuals[h] if len(residuals[h]) == n else [math.inf if not pending and current is None else queue.duration(h)] * n
+            ends = residuals[h] if len(residuals[h]) == n else [math.inf if not pending and current is None else rates.get(h, typical)] * n
             charge = charges[h, q]
             for i, end in enumerate(ends):
                 slots.append(Slot(h, q, end if h in reachable else math.inf,
                                   max(memory, charge[i]) if i < len(charge) else memory))
-        rows[q] = {"batch": str(batch), "allocation_eta_sec": seconds(current), "pool_eta_sec": None}
+        rows[q] = {"batch": str(batch), "allocation_eta_sec": seconds(current), "pool_eta_sec": None,
+                   "sample_jobs": len(times.durations), "mean_runtime_sec": typical if times.durations else None,
+                   "dispatch_by_host": {h: {"seconds": gap, "pairs": pairs} for h, (gap, pairs) in times.dispatch.items()},
+                   "eta_warning": times.warning(now, count, oldest_age)}
     return queues, slots, rows
 
 
@@ -319,6 +326,8 @@ def main():
     parser.add_argument("--root", type=Path, required=True, help="deployed scheduler directory")
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--json", action="store_true", help="report both ETAs in seconds")
+    parser.add_argument("--allocation-only", action="store_true", help="skip the pool simulation")
+    parser.add_argument("--with-warnings", action="store_true", help="append the timing warning to tab-separated rows")
     args = parser.parse_args()
     root = args.state_root or args.root / ".parallel-workers/adaptive"
     try:
@@ -334,8 +343,9 @@ def main():
         queues, slots, rows = queue_snapshot(root, pool, now, lease, hosts, charges, dependency_hold)
         cursor_path = root / "cursor.json"
         cursor = json.loads(cursor_path.read_text()) if cursor_path.is_file() else {}
-        predicted = forecast(hosts, queues, slots, int(pool["shared_io_capacity"]), allocate, cursor,
-                             cpu_deadline=time.process_time() + 1.5)
+        predicted = {} if args.allocation_only else forecast(
+            hosts, queues, slots, int(pool["shared_io_capacity"]), allocate, cursor,
+            cpu_deadline=time.process_time() + 1.5)
         for q, eta in predicted.items():
             rows[q]["pool_eta_sec"] = seconds(eta)
     except (OSError, ValueError, KeyError, ImportError, TypeError) as error:
@@ -345,7 +355,10 @@ def main():
         print(json.dumps(rows, indent=2))
     else:
         for row in rows.values():
-            print(row["batch"], row["allocation_eta_sec"] or -1, row["pool_eta_sec"] or -1, sep="\t")
+            fields = [row["batch"], row["allocation_eta_sec"] or -1, row["pool_eta_sec"] or -1]
+            if args.with_warnings:
+                fields.append(row["eta_warning"] or "-")
+            print(*fields, sep="\t")
     return 0
 
 

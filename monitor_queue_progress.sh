@@ -21,6 +21,7 @@ SSH_CONNECT_TIMEOUT_SEC=3
 REGISTRY_FILE=""
 WRITE_REGISTRY=1
 DATA_ONLY=0
+ETA_WARNINGS=0
 ETA_MODE=pool
 PROCESS_SCAN_FILE=""
 ALLOW_NETWORK_ROOT=0
@@ -40,7 +41,7 @@ usage() {
 Queue progress monitor (snapshot view).
 
 Usage:
-  $0 [--root <path>] [--limit <n>] [--running_window_sec <n>] [--history_window_sec <n>] [--older_limit <n>] [--bar_width <n>] [--max_label_len <n>] [--max_batch_scan <n>] [--cache_file <path>] [--term_cols <n>] [--term_lines <n>] [--scrollable] [--hosts_file <path>] [--hosts "<h1> <h2> ..."] [--registry_file <path>] [--process_scan_file <path>] [--self_timeout_sec <n>] [--eta_mode pool|allocation] [--data_only] [--no_registry] [--allow_network_root]
+  $0 [--root <path>] [--limit <n>] [--running_window_sec <n>] [--history_window_sec <n>] [--older_limit <n>] [--bar_width <n>] [--max_label_len <n>] [--max_batch_scan <n>] [--cache_file <path>] [--term_cols <n>] [--term_lines <n>] [--scrollable] [--hosts_file <path>] [--hosts "<h1> <h2> ..."] [--registry_file <path>] [--process_scan_file <path>] [--self_timeout_sec <n>] [--eta_mode pool|allocation] [--data_only] [--eta_warnings] [--no_registry] [--allow_network_root]
 
 Defaults:
   --root $ROOT
@@ -82,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --process_scan_file) PROCESS_SCAN_FILE="$2"; shift 2 ;;
     --self_timeout_sec) SELF_TIMEOUT_SEC="$2"; shift 2 ;;
     --eta_mode) ETA_MODE="$2"; shift 2 ;;
+    --eta_warnings) ETA_WARNINGS=1; shift ;;
     --data_only) DATA_ONLY=1; WRITE_REGISTRY=1; shift ;;
     --no_registry) WRITE_REGISTRY=0; shift ;;
     --allow_network_root) ALLOW_NETWORK_ROOT=1; shift ;;
@@ -778,8 +780,10 @@ elif ! python3 "$FAILURE_SCRIPT" --state_root "${ADAPTIVE_STATE_ROOT:-$ROOT/.par
 fi
 # One simulation per snapshot; all consumers keep the same ETA column.
 eta_state_root="${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}"
-if [ "$ETA_MODE" = pool ] && [ -f "$eta_state_root/pool.env" ] && [ -f "$ROOT/adaptive_coordinator.py" ]; then
-  python3 "$SCRIPT_DIR/monitor_pool_eta.py" --root "$ROOT" --state-root "$eta_state_root" > "$tmp_pool_eta" || : > "$tmp_pool_eta"
+if [ -f "$eta_state_root/pool.env" ] && [ -f "$ROOT/adaptive_coordinator.py" ]; then
+  eta_options=(--with-warnings)
+  [ "$ETA_MODE" = pool ] || eta_options+=(--allocation-only)
+  python3 "$SCRIPT_DIR/monitor_pool_eta.py" --root "$ROOT" --state-root "$eta_state_root" "${eta_options[@]}" > "$tmp_pool_eta" || : > "$tmp_pool_eta"
 fi
 today_ymd="$(format_epoch "$now_epoch" '+%Y%m%d' 2>/dev/null || echo '')"
 
@@ -1185,9 +1189,10 @@ while IFS= read -r batch_dir; do
 
   eta_sec=-1
   allocation_eta=""
+  eta_warning=""
   pool_eta=""
   if [ "$execution_mode" = "adaptive-shared-queue" ] && [ -s "$tmp_pool_eta" ]; then
-    read -r allocation_eta pool_eta < <(awk -F '\t' -v b="$batch_dir" '$1 == b {print $2, $3; exit}' "$tmp_pool_eta") || true
+    read -r allocation_eta pool_eta eta_warning < <(awk -F '\t' -v b="$batch_dir" '$1 == b {print $2, $3, $4; exit}' "$tmp_pool_eta") || true
   fi
   if { [ "$state" = "RUNNING" ] || [ "$state" = "DRAINING" ]; } \
       && [ "$done_jobs" -gt 0 ] && [ "$done_jobs" -lt "$total_jobs" ]; then
@@ -1213,7 +1218,7 @@ while IFS= read -r batch_dir; do
   case "$state:${adaptive_hold:-}" in
     RUNNING:SMB|RUNNING:SMB!|RUNNING:HOST) ;;
     RUNNING:*|DRAINING:*|PENDING:*)
-      if [ -n "$pool_eta" ]; then eta_sec="$pool_eta"; fi ;;
+      if [ "$ETA_MODE" = pool ] && [ -n "$pool_eta" ]; then eta_sec="$pool_eta"; fi ;;
   esac
 
   if [ "$state" = "RUNNING" ] || [ "$state" = "PENDING" ] || [ "$state" = "DRAINING" ] \
@@ -1231,8 +1236,12 @@ while IFS= read -r batch_dir; do
     end_txt="$(format_epoch "$history_epoch" '+%Y/%m/%d | %H:%M' 2>/dev/null || echo 'n/a')"
   fi
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$priority" "$quality" "$start_epoch" "$state" "$label" "$worker_slots" "$done_jobs" "$total_jobs" "$display_elapsed_sec" "$eta_sec" "$pct" "$start_txt" "$history_epoch" "$end_txt" "$queue_path_relative" "$tag_clean" "$project_name_meta" "$failed_jobs" "$failed_txt" "$rerun_jobs" >> "$tmp_rows"
+  eta_suffix=""
+  if [ "$ETA_WARNINGS" -eq 1 ] || [ "$DATA_ONLY" -eq 0 ]; then
+    eta_suffix=$'\t'${eta_warning:--}
+  fi
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n" \
+    "$priority" "$quality" "$start_epoch" "$state" "$label" "$worker_slots" "$done_jobs" "$total_jobs" "$display_elapsed_sec" "$eta_sec" "$pct" "$start_txt" "$history_epoch" "$end_txt" "$queue_path_relative" "$tag_clean" "$project_name_meta" "$failed_jobs" "$failed_txt" "$rerun_jobs" "$eta_suffix" >> "$tmp_rows"
 
   if [ "$WRITE_REGISTRY" -eq 1 ]; then
     update_time_txt="$(format_epoch "$now_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '')"
