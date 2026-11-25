@@ -21,6 +21,7 @@ import monitor_queue_failures  # noqa: E402  (deployed beside this script)
 
 SCHEMA = 1
 FAILED_JOBS_MAX = 200  # per queue; failed_jobs_total keeps the full count
+RETIRED_SECONDS = 7 * 86400  # the coordinator's retired-queue index keeps entries this long
 COMMANDS = ("set-host-state", "confirm-interrupted-jobs", "set-host-budget", "pool-drain")
 
 
@@ -72,8 +73,40 @@ def hosts_section(root, pool, now):
             and (window["away_until"] is None or now < window["away_until"]),
             "away_window": {key: window[key] for key in ("away_from", "away_until", "reason")}
             if window else None,
+            # Opt-in host settings; the resource table has these columns only when one is used.
+            "gpu_units": int(row.get("gpu_units") or 0),
+            "owner_idle_seconds": int(row.get("owner_idle_seconds") or 0),
+            "owner_active": row.get("owner_active") or "hold",
         })
     return hosts
+
+
+def usage_summary(status):
+    """CPU time of finished jobs, summed by the coordinator from per-job usage records."""
+    return {
+        "jobs": integer(status.get("jobs_with_usage"), 0),
+        "cpu_hours_succeeded": round(float(status.get("cpu_seconds_succeeded") or 0) / 3600, 4),
+        "cpu_hours_failed": round(float(status.get("cpu_seconds_failed") or 0) / 3600, 4),
+        "state": status.get("usage_state") or "unknown",
+    }
+
+
+def retired_queues(root, now):
+    """Queues retired within RETIRED_SECONDS, with their final lifecycle and usage."""
+    result = []
+    for path in sorted((root / "retired").glob("*.env")):
+        try:
+            entry = read_env(path)
+            retired = int(entry["retired_epoch"])
+            if now - retired > RETIRED_SECONDS:
+                continue
+            status = optional_env(Path(entry["batch_dir"]) / "adaptive/status.env")
+            result.append({"queue_id": entry["queue_id"], "tag": entry["tag_clean"],
+                           "batch_dir": entry["batch_dir"], "retired": retired,
+                           "lifecycle": status.get("lifecycle"), "usage": usage_summary(status)})
+        except (OSError, KeyError, ValueError) as error:
+            result.append({"queue_id": path.stem, "error": str(error)})
+    return result
 
 
 def queue_entry(registration):
@@ -93,6 +126,7 @@ def queue_entry(registration):
         "running_workers": integer(status.get("running_workers"), 0),
         "target_workers": integer(status.get("target_workers"), 0),
         "share_interrupted_jobs": integer(status.get("share_interrupted_jobs"), 0),
+        "usage": usage_summary(status),
         "control": {
             "generation": int(control["generation"]),
             "admission": control["admission"],
@@ -164,7 +198,7 @@ def snapshot(root, scheduler):
     pool_file = root / "pool.env"
     if not pool_file.is_file():
         return {"schema": SCHEMA, "updated": round(now, 3), "pool": {"state": "INACTIVE"},
-                "hosts": [], "queues": [], "commands": []}
+                "hosts": [], "queues": [], "retired_queues": retired_queues(root, now), "commands": []}
     pool = read_env(pool_file)
     ready = optional_env(root / "coordinator.ready")
     lease = integer(pool.get("lease_seconds"), 20)
@@ -196,6 +230,7 @@ def snapshot(root, scheduler):
         },
         "hosts": hosts_section(root, pool, now),
         "queues": queues,
+        "retired_queues": retired_queues(root, now),
         "failures_error": failures_error,
         # Commands the deployed scheduler offers, so controls arriving with a later pool stay disabled.
         "commands": [command for command in COMMANDS if f"\n  {command} " in usage],

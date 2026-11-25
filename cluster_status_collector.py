@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+from typing import Any
 
 from failure_events import FailureEvents
 import queue_eta_history
@@ -297,7 +298,7 @@ class Collector:
         self.coordinator, self.io_stream = None, None
         self.shared = {"host": None, "ok": False, "error": "starting", "updated": None}
         self.queues, self.queue_process = [], None
-        self.scheduler = {"ok": None, "error": None, "attempted": None}
+        self.scheduler: dict[str, Any] = {"ok": None, "error": None, "attempted": None}
         self.queue_refresh = {"ok": None, "error": None, "updated": None, "attempted": None,
                               "path": str(args.queue_snapshot)}
         self.failure_events, self.failure_events_error = None, None
@@ -580,11 +581,16 @@ class Collector:
             self.failure_events_error = str(error)
 
     def queue_rows(self):
-        """Queue rows joined to their scheduler controls by the batch tag (TSV column 17)."""
+        """Queue rows joined to their scheduler controls by the batch tag (TSV column 17), and to
+        CPU usage from the live or, once a queue has finished, the retired scheduler entry."""
         controls = {queue["tag"]: queue for queue in self.scheduler.get("queues", []) if "tag" in queue}
+        usage = {queue["tag"]: queue["usage"] for queue in self.scheduler.get("retired_queues", [])
+                 if "usage" in queue}
+        usage.update((tag, queue["usage"]) for tag, queue in controls.items() if "usage" in queue)
         return [dict(queue, control_id=controls.get(queue["id"], {}).get("queue_id"),
                      source_dir=controls.get(queue["id"], {}).get("source_dir"),
-                     submitted_by=controls.get(queue["id"], {}).get("submitted_by"))
+                     submitted_by=controls.get(queue["id"], {}).get("submitted_by"),
+                     usage=usage.get(queue["id"]))
                 for queue in self.queues]
 
     def snapshot(self):

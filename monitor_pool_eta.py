@@ -66,6 +66,7 @@ def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_
             level = profile["host_priorities"].get(h, profile["schedule_priority"])
             if (level != "off" and q not in blocked
                     and profile["cpu_units_per_job"] <= cpu and profile["memory_mib_per_job"] <= memory
+                    and profile.get("gpu_units_per_job", 0) <= host.get("gpu_units", 0)
                     and profile["shared_io_units_per_job"] <= io_capacity):
                 levels[q] = level
                 if profile["shared_io_units_per_job"] > free_io:
@@ -135,8 +136,9 @@ def skip_stable_refills(queues, pending, slots, counts, targets, contested, now)
             pending[s.queue] -= n
 
 
-def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadline=math.inf):
-    """Discrete finishes, bulk-refilling unchanged slots across long backlogs."""
+def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadline=math.inf, backfill=False):
+    """Discrete finishes, bulk-refilling unchanged slots across long backlogs. With backfill, each
+    plan sees the simulated slots' finish times as the hosts' release estimates."""
     # Unknown runtimes occupy their placement indefinitely. Other hosts/queues
     # can still yield a forecast without guessing when those workers will free up.
     pending = {q: item.pending for q, item in queues.items()}
@@ -175,9 +177,18 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
                             profile["early_sample_remaining"] = remaining
                         else:
                             del profile["early_sample_remaining"]
-            plan = allocate({"schema_version": 1, "hosts": hosts, "queues": profiles,
+            plan_hosts, policy = hosts, {}
+            if backfill:
+                releases = defaultdict(list)
+                for s in slots:
+                    if math.isfinite(s.finish):
+                        releases[s.host].append([max(0, math.ceil(s.finish - now)),
+                                                 queues[s.queue].profile["cpu_units_per_job"], s.memory])
+                plan_hosts = [dict(h, release_estimates=sorted(releases[h["host_id"]])) for h in hosts]
+                policy = {"backfill": True}
+            plan = allocate({"schema_version": 1, "hosts": plan_hosts, "queues": profiles,
                              "shared_io_capacity": io_capacity, "allow_unschedulable_queues": True,
-                             "cursor": cursor or {}, "reservations": [
+                             "cursor": cursor or {}, **policy, "reservations": [
                                  {"host_id": h, "queue_id": q, "count": n, "memory_mib": memory[h, q]}
                                  for (h, q), n in counts.items()]})
             targets, cursor = plan["targets"], plan["cursor"]
@@ -241,6 +252,8 @@ def read_hosts(root, pool, ready, now, lease):
         name = h["id"]
         host: dict[str, Any] = dict(host_id=name, enabled=h["enabled"], cpu_units=h["cpu_units"], memory_mib=h["memory_mib"],
                     live_cpu_units=0, live_memory_mib=0, reachable=False, drain_only=h["away"], blocked_queues=[])
+        if h["gpu_units"]:
+            host["gpu_units"] = h["gpu_units"]
         hosts.append(host)
         if not h["enabled"]:
             continue
@@ -267,7 +280,7 @@ def read_hosts(root, pool, ready, now, lease):
     return hosts, charges
 
 
-def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold):
+def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold, backfill_runtime=None):
     queues, slots, rows = {}, [], {}
     reachable = {h["host_id"] for h in hosts if h["reachable"]}
     for reg_path in sorted((state_root / "queues").glob("*.env")):
@@ -298,6 +311,11 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
                        shared_io_units_per_job=int(res["shared_io_units_per_job"]),
                        max_workers=int(status["max_workers"]), schedule_priority=int(status["schedule_priority"]),
                        host_priorities=host_priorities(status.get("host_priorities")), admission="enabled" if enabled else "paused")
+        if int(res.get("gpu_units_per_job", 0)):
+            profile["gpu_units_per_job"] = int(res["gpu_units_per_job"])
+        runtime = backfill_runtime(batch) if backfill_runtime else None
+        if runtime is not None:
+            profile["backfill_runtime_seconds"] = runtime
         meta = read_env(batch / "run_meta.env")
         if meta["run_token"] != q or meta["pool_id"] != pool["pool_id"]:
             raise ValueError("queue run metadata changed")
@@ -363,12 +381,22 @@ def main():
                 or not -2 <= now - int(ready["updated_epoch"]) <= lease or int(ready.get("quarantined_queues", 0))):
             raise ValueError("pool is inactive, stale or has quarantined queues")
         hosts, charges = read_hosts(root, pool, ready, now, lease)
-        queues, slots, rows = queue_snapshot(root, pool, now, lease, hosts, charges, dependency_hold)
+        backfill = pool.get("backfill") == "1"
+        runtime = None
+        if backfill:
+            # The coordinator's own estimate: p90 of the queue's recent successful runtimes.
+            from adaptive_coordinator import BACKFILL_MIN_SAMPLES, job_timing, nearest_rank  # type: ignore[reportMissingImports]
+
+            def backfill_runtime(batch):
+                durations = job_timing(batch / "claims", batch / "done", {})["durations"]
+                return math.ceil(nearest_rank(durations, 0.9)) if len(durations) >= BACKFILL_MIN_SAMPLES else None
+            runtime = backfill_runtime
+        queues, slots, rows = queue_snapshot(root, pool, now, lease, hosts, charges, dependency_hold, runtime)
         cursor_path = root / "cursor.json"
         cursor = json.loads(cursor_path.read_text()) if cursor_path.is_file() else {}
         predicted = {} if args.allocation_only else forecast(
             hosts, queues, slots, int(pool["shared_io_capacity"]), allocate, cursor,
-            cpu_deadline=time.process_time() + 1.5)
+            cpu_deadline=time.process_time() + 1.5, backfill=backfill)
         for q, eta in predicted.items():
             rows[q]["pool_eta_sec"] = seconds(eta)
     except (OSError, ValueError, KeyError, ImportError, TypeError) as error:

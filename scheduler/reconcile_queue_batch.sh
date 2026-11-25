@@ -338,6 +338,15 @@ if [ "$RERUN_MISSING" -eq 1 ]; then
       }
     fi
     SHARED_IO_UNITS="$(read_state "$RESOURCE_SNAPSHOT" shared_io_units_per_job)" || exit 1
+    # Opt-in requests are present only when the batch used them.
+    GPU_UNITS=""
+    MEMORY_LIMIT=""
+    if grep -q '^gpu_units_per_job=' "$RESOURCE_SNAPSHOT"; then
+      GPU_UNITS="$(read_state "$RESOURCE_SNAPSHOT" gpu_units_per_job)" || exit 1
+    fi
+    if grep -q '^memory_limit_mib=' "$RESOURCE_SNAPSHOT"; then
+      MEMORY_LIMIT="$(read_state "$RESOURCE_SNAPSHOT" memory_limit_mib)" || exit 1
+    fi
     SCHEDULE_PRIORITY="$(read_state "$CONTROL_FILE" schedule_priority)" || exit 1
     if grep -q '^host_priorities=' "$CONTROL_FILE"; then
       HOST_PRIORITIES="$(read_state "$CONTROL_FILE" host_priorities)" || exit 1
@@ -396,6 +405,8 @@ if [ "$RERUN_MISSING" -eq 1 ]; then
       ADAPTIVE_ARGS+=(--memory_calibration_jobs "$CALIBRATION_JOBS"
         --memory_calibration_seconds "$CALIBRATION_SECONDS" --memory_min_mib_per_job "$CALIBRATION_MIN")
     fi
+    [ -z "$GPU_UNITS" ] || ADAPTIVE_ARGS+=(--gpu_units_per_job "$GPU_UNITS")
+    [ -z "$MEMORY_LIMIT" ] || ADAPTIVE_ARGS+=(--memory_limit_mib "$MEMORY_LIMIT")
     [ -z "$PROJECT_NAME" ] || ADAPTIVE_ARGS+=(--project "$PROJECT_NAME")
     [ "$ADMISSION" != paused ] || ADAPTIVE_ARGS+=(--paused)
     if [ ! -x "$ADAPTIVE_SCHEDULER_SCRIPT" ]; then

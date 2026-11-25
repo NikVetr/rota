@@ -33,6 +33,7 @@ Commands:
   submit-chain --manifest <json>   Submit an ordered list of submit argument lists
   pool-start --resources_file <file> [--pool_name <name>] [--shared_io_capacity <units>]
              [--io_pressure_host <host_id>] [--smbd_cpu_limit_pct <percent>]
+             [--backfill 0|1]
   pool-start --recover-inactive [--expected-pool-id <pool_id>]
   pool-status
   set-host-budget --host_id <id> --cpu_units <int> --memory_mib <MiB>
@@ -68,6 +69,8 @@ Submit options:
                                       [default,]HOST=<integer>|HOST=off (pool host IDs)
   --cpu_units_per_job <integer>      Default: 1
   --shared_io_units_per_job <int>    Default: 1 if the pool has shared I/O capacity, else 0
+  --gpu_units_per_job <int>          Default: 0. Devices per job, on hosts with gpu_units
+  --memory_limit_mib <MiB>           Optional: end a job whose processes exceed this (sampled)
   --max_workers <integer>            Default: 0 (pool-limited)
   --paused                           Start with new-job admission paused
   --memory_calibration_jobs <0|20..50>  Opt in after successful jobs (default 0)
@@ -251,15 +254,21 @@ hash_file() {
 }
 
 validate_resources() {
+  # The opt-in host columns (devices, owner activity) are present only when an inventory sets one.
   awk -F '\t' '
     NR == 1 {
-      if ($0 != "host_id\tssh_target\tcpu_units\tmemory_mib\tenabled") bad=1
+      columns=5
+      if ($0 == "host_id\tssh_target\tcpu_units\tmemory_mib\tenabled\tgpu_units\towner_idle_seconds\towner_active")
+        columns=8
+      else if ($0 != "host_id\tssh_target\tcpu_units\tmemory_mib\tenabled") bad=1
       next
     }
     NF {
-      if (NF != 5 || $1 !~ /^[A-Za-z0-9_.-]+$/ || $1 == "." || $1 == ".." ||
+      if (NF != columns || $1 !~ /^[A-Za-z0-9_.-]+$/ || $1 == "." || $1 == ".." ||
           $2 == "" || $2 ~ /[\r\n\t]/ ||
           $3 !~ /^[1-9][0-9]*$/ || $4 !~ /^[1-9][0-9]*$/ || $5 !~ /^[01]$/ || seen[$1]++) bad=1
+      if (columns == 8 && ($6 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/ || ($7 != 0 && ($7 < 60 || $7 > 86400)) ||
+          ($8 != "hold" && $8 != "suspend"))) bad=1
       if (seen_target[$2]++) bad=1
       if ($5 == 1) enabled++
     }
@@ -283,6 +292,7 @@ write_pool() {
     echo "cpu_tolerance_pct=$CPU_TOLERANCE_PCT"
     echo "tick_seconds=$TICK_SECONDS"
     echo "start_interval_seconds=$START_INTERVAL_SECONDS"
+    echo "backfill=$BACKFILL"
     echo "lease_seconds=$LEASE_SECONDS"
     echo "agent_sha256=$AGENT_HASH"
     echo "worker_sha256=$WORKER_HASH"
@@ -378,6 +388,7 @@ audit_host_adaptive_clear() {
 
 stage_host() {
   local host_id="$1" target="$2" cpu="$3" memory="$4" archive="$5"
+  local gpu="${6:-0}" owner_idle="${7:-0}" owner_active="${8:-hold}"
   "$SSH_BIN" -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
 incoming=\"\$state_dir/bin.incoming.\$\$\"
@@ -414,11 +425,16 @@ if [ -f \"\$agent\" ]; then
   grep -Fqx 'runner_sha256=$WORKER_HASH' \"\$agent\"
   grep -Fqx 'claim_sha256=$CLAIM_HASH' \"\$agent\"
   grep -Fqx 'memory_sha256=$MEMORY_HASH' \"\$agent\"
+  grep -Fqx 'gpu_units=$gpu' \"\$agent\"
+  grep -Fqx 'owner_idle_seconds=$owner_idle' \"\$agent\"
+  grep -Fqx 'owner_active=$owner_active' \"\$agent\"
 else
   { echo schema_version=1; echo pool_id='$POOL_ID'; echo host_id='$host_id';
     echo cpu_units='$cpu'; echo memory_mib='$memory';
     echo \"runner_path=\$state_dir/bin/mmworker.sh\"; echo runner_sha256='$WORKER_HASH';
-    echo claim_sha256='$CLAIM_HASH'; echo memory_sha256='$MEMORY_HASH'; } > \"\$agent.tmp.\$\$\"
+    echo claim_sha256='$CLAIM_HASH'; echo memory_sha256='$MEMORY_HASH';
+    echo gpu_units='$gpu'; echo owner_idle_seconds='$owner_idle'; echo owner_active='$owner_active';
+  } > \"\$agent.tmp.\$\$\"
   chmod 600 \"\$agent.tmp.\$\$\"
   mv \"\$agent.tmp.\$\$\" \"\$agent\"
 fi" < "$archive" || die "agent staging failed on $target"
@@ -679,7 +695,7 @@ restart_agent() {
   LEASE_SECONDS="$(env_value "$POOL_FILE" lease_seconds)"
   row="$(awk -F '\t' -v host="$host_id" 'NR > 1 && $1 == host' "$RESOURCES_FILE")"
   [ -n "$row" ] || die "unknown adaptive host: $host_id"
-  IFS=$'\t' read -r _ target cpu memory enabled <<< "$row"
+  IFS=$'\t' read -r _ target cpu memory enabled gpu_units owner_idle owner_active <<< "$row"
   [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || \
     die "host has no agent in this pool: $host_id"
   # Stage only the pool's own files: the running coordinator expects them.
@@ -703,7 +719,8 @@ restart_agent() {
   [ "$agent_state" = STOPPED ] || die "invalid adaptive agent state on $target"
   audit_recovery_workers "$host_id" "$target"
   make_stage_archive
-  stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar"
+  stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar" \
+    "${gpu_units:-0}" "${owner_idle:-0}" "${owner_active:-hold}"
   payload="$(python3 -c 'import json,sys; print(json.dumps(dict(zip(
     ("action","pool_id","host_id","reason"),sys.argv[1:]))))' \
     resolve-rebooted "$POOL_ID" "$host_id" "$reason")"
@@ -746,7 +763,7 @@ start_coordinator() {
     --lease-seconds "$LEASE_SECONDS" --io-pressure-host "$IO_PRESSURE_HOST" \
     --smbd-cpu-limit-pct "$SMBD_CPU_LIMIT_PCT" \
     --cpu-tolerance-pct "$CPU_TOLERANCE_PCT" \
-    --start-interval-seconds "$START_INTERVAL_SECONDS" \
+    --start-interval-seconds "$START_INTERVAL_SECONDS" --backfill "$BACKFILL" \
     < /dev/null >> "$STATE_ROOT/coordinator.log" 2>&1 &
   pid=$!
   for attempt in $(seq 1 "$READY_TIMEOUT"); do
@@ -796,6 +813,7 @@ pool_start() {
   TICK_SECONDS="${ADAPTIVE_TICK_SECONDS:-5}"
   START_INTERVAL_SECONDS="${ADAPTIVE_START_INTERVAL_SECONDS:-4}"
   LEASE_SECONDS="${ADAPTIVE_LEASE_SECONDS:-20}"
+  BACKFILL="${ADAPTIVE_BACKFILL:-0}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --resources_file) RESOURCES_FILE="$2"; shift 2 ;;
@@ -809,6 +827,9 @@ pool_start() {
         [ "$#" -ge 2 ] || die "--start_interval_seconds requires a value"
         START_INTERVAL_SECONDS="$2"; shift 2 ;;
       --lease_seconds) LEASE_SECONDS="$2"; shift 2 ;;
+      --backfill)
+        [ "$#" -ge 2 ] || die "--backfill requires 0 or 1"
+        BACKFILL="$2"; shift 2 ;;
       --recover-inactive) recover=1; shift ;;
       --expected-pool-id)
         [ $# -ge 2 ] || die "--expected-pool-id requires a value"
@@ -850,6 +871,9 @@ pool_start() {
     TICK_SECONDS="$(env_value "$POOL_FILE" tick_seconds)"
     START_INTERVAL_SECONDS="$(env_value "$POOL_FILE" start_interval_seconds)"
     LEASE_SECONDS="$(env_value "$POOL_FILE" lease_seconds)"
+    # Pools started before backfill existed have no key and recover with it off.
+    BACKFILL="$(awk -F= '$1 == "backfill" {n++; value=$2}
+      END {if (n > 1) exit 1; print (n ? value : 0)}' "$POOL_FILE")" || die "invalid pool backfill setting"
     CREATED_EPOCH="$(env_value "$POOL_FILE" created_epoch)"
     MEMORY_CONTROL_VERSION="$(awk -F= '$1 == "memory_control_version" {n++; value=$2}
       END {if (n > 1) exit 1; print value}' "$POOL_FILE")" || die "invalid pool memory-control capability"
@@ -887,6 +911,7 @@ pool_start() {
   fi
   validate_resources "$RESOURCES_FILE"
   is_uint "$SHARED_IO_CAPACITY" || die "shared I/O capacity must be non-negative"
+  [[ "$BACKFILL" = 0 || "$BACKFILL" = 1 ]] || die "backfill must be 0 or 1"
   is_uint "$SMBD_CPU_LIMIT_PCT" && [ "$SMBD_CPU_LIMIT_PCT" -gt 0 ] || \
     die "SMB CPU limit must be a positive integer percentage"
   is_uint "$CPU_TOLERANCE_PCT" && [ "$CPU_TOLERANCE_PCT" -le 100 ] || \
@@ -948,14 +973,14 @@ pool_start() {
     audit_host_adaptive_clear "$target" "$recover" || \
       die "pool start found conflicting adaptive scheduler processes"
   done < "$CLUSTER_HOSTS_FILE"
-  while IFS=$'\t' read -r host_id target cpu memory enabled; do
+  while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ -n "$host_id" ] || continue
     awk -v target="$target" '$1 == target {found=1} END {exit !found}' \
       "$CLUSTER_HOSTS_FILE" && continue
     audit_host_adaptive_clear "$target" "$recover" || \
       die "pool start found conflicting adaptive scheduler processes"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
-  while IFS=$'\t' read -r host_id target cpu memory enabled; do
+  while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
     plan_state="$STATE_ROOT/plans/$host_id/state.json"
     if [ "$recover" -eq 1 ]; then
@@ -970,7 +995,7 @@ pool_start() {
     fi
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
   write_pool STARTING "" "$final_state"
-  while IFS=$'\t' read -r host_id target cpu memory enabled; do
+  while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ -n "$host_id" ] || continue
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
     if [ "$recover" -eq 1 ]; then
@@ -978,7 +1003,8 @@ pool_start() {
       audit_recovery_workers "$host_id" "$target"
       withhold_agent_lease "$target"
     fi
-    stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar"
+    stage_host "$host_id" "$target" "$cpu" "$memory" "$TEMP_DIR/stage.tar" \
+    "${gpu_units:-0}" "${owner_idle:-0}" "${owner_active:-hold}"
     start_agent "$host_id" "$target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
 
@@ -1208,11 +1234,11 @@ finalize_drain() {
   expected_hash="$(env_value "$POOL_FILE" resources_sha256)"
   [ "$(hash_file "$RESOURCES_FILE")" = "$expected_hash" ] || \
     die "adaptive resources file differs from the pool record"
-  while IFS=$'\t' read -r host_id target cpu memory enabled; do
+  while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
     agent_idle verify "$host_id" "$target" || die "cannot verify idle adaptive agent on $target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
-  while IFS=$'\t' read -r host_id target cpu memory enabled; do
+  while IFS=$'\t' read -r host_id target cpu memory enabled gpu_units owner_idle owner_active; do
     [ "$enabled" = 1 ] || [ "$host_id" = "$IO_PRESSURE_HOST" ] || continue
     agent_idle stop "$host_id" "$target" || die "cannot stop drained adaptive agent on $target"
   done < <(sed -n '2,$p' "$RESOURCES_FILE")
@@ -1293,13 +1319,13 @@ pool_drain() {
 }
 
 submit_queue() {
-  local model_dir="" queue="" run_name="" priority=50 cpu=1 memory="" io="" maximum=0 admission=enabled
+  local model_dir="" queue="" run_name="" priority=50 cpu=1 memory="" io="" maximum=0 admission=enabled gpu=0 memory_limit=""
   local recover=0 allow_network=0 project="" project_option_set=0
   local calibration_jobs=0 calibration_seconds=0 calibration_min=""
   local workflow_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --project|--memory_calibration_jobs|--memory_calibration_seconds|--memory_min_mib_per_job|--after)
+      --project|--memory_calibration_jobs|--memory_calibration_seconds|--memory_min_mib_per_job|--after|--gpu_units_per_job|--memory_limit_mib)
         [ $# -ge 2 ] || die "$1 requires a value" ;;
     esac
     case "$1" in
@@ -1316,6 +1342,8 @@ submit_queue() {
       --memory_calibration_seconds) calibration_seconds="$2"; shift 2 ;;
       --memory_min_mib_per_job) calibration_min="$2"; shift 2 ;;
       --shared_io_units_per_job) io="$2"; shift 2 ;;
+      --gpu_units_per_job) gpu="$2"; shift 2 ;;
+      --memory_limit_mib) memory_limit="$2"; shift 2 ;;
       --max_workers) maximum="$2"; shift 2 ;;
       --paused) admission=paused; shift ;;
       --recover_inactive) recover=1; shift ;;
@@ -1346,6 +1374,8 @@ submit_queue() {
   [ "$allow_network" -eq 0 ] || set -- "$@" --allow_network_coordinator
   [ "$project_option_set" -eq 0 ] || set -- "$@" --project "$project"
   [ -z "$calibration_min" ] || set -- "$@" --memory_min_mib_per_job "$calibration_min"
+  [ "$gpu" = 0 ] || set -- "$@" --gpu_units_per_job "$gpu"
+  [ -z "$memory_limit" ] || set -- "$@" --memory_limit_mib "$memory_limit"
   ADAPTIVE_STATE_ROOT="$STATE_ROOT" ADAPTIVE_POOL_MARKER="$POOL_FILE" \
     MODE_TRANSITION_LOCK="$TRANSITION_LOCK" \
     bash "$START_WORKERS_SCRIPT" \
@@ -1435,7 +1465,7 @@ assert_memory_controls_supported() {
   resources="$(env_value "$POOL_FILE" resources_file)"
   [ "$(hash_file "$resources")" = "$(env_value "$POOL_FILE" resources_sha256)" ] || \
     die "reviewed resource table hash mismatch"
-  while IFS=$'\t' read -r host target cpu memory enabled; do
+  while IFS=$'\t' read -r host target cpu memory enabled _; do
     [ "$enabled" = 1 ] || continue
     if ssh_no_input "$target" "set -e
 state_dir=\"\$HOME/.parallel-workers/adaptive/$pool\"
@@ -1476,7 +1506,7 @@ assert_host_priorities_supported() {
 update_control() {
   local batch_dir="$1" field="$2" value="$3" expected="${4:-}"
   local generation queue_id admission priority maximum memory="" tmp schema=1
-  local host_priorities="" resources fields
+  local host_priorities="" resources fields gpu limit
   local host_priorities_format='^[A-Za-z0-9._-]+=(-?[0-9]+|off)(,[A-Za-z0-9._-]+=(-?[0-9]+|off))*$'
   local calibration_jobs=0 calibration_seconds=0 calibration_min="" calibration_generation=""
   assert_local_state_root
@@ -1537,9 +1567,15 @@ update_control() {
       is_uint "$value" && [ "$value" -gt 0 ] || die "memory per job must be a positive integer"
       [ "$(hash_file "$RESOURCE_FILE")" = "$(env_value "$REGISTRATION_FILE" resources_sha256)" ] || \
         die "immutable queue resource hash mismatch"
+      # Opt-in requests the queue was submitted with still bind the corrected floor.
+      gpu="$(awk -F= '$1 == "gpu_units_per_job" {print $2}' "$RESOURCE_FILE")"
+      limit="$(awk -F= '$1 == "memory_limit_mib" {print $2}' "$RESOURCE_FILE")"
+      [ -z "$limit" ] || [ "$value" -le "$limit" ] || \
+        die "memory per job must not exceed the queue's memory limit of $limit MiB"
       python3 "$COORDINATOR_SCRIPT" profile-fits --state-root "$STATE_ROOT" \
         --pool-id "$(env_value "$POOL_FILE" pool_id)" \
-        --cpu-units "$(env_value "$RESOURCE_FILE" cpu_units_per_job)" --memory-mib "$value" || \
+        --cpu-units "$(env_value "$RESOURCE_FILE" cpu_units_per_job)" --memory-mib "$value" \
+        --gpu-units "${gpu:-0}" || \
         die "this job profile does not fit any enabled adaptive host"
       assert_memory_controls_supported
       memory="$value"

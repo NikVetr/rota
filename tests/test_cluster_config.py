@@ -41,6 +41,36 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "modified"):
             config.render(data, self.root / "generated files")
 
+    def test_opt_in_settings_render_only_when_used(self):
+        self.data["shared_root"] = str(self.root)
+        default = config.render(self.load(copy.deepcopy(self.data)), self.root / "default")
+        table = (default.parent / "adaptive-resources.tsv").read_text()
+        self.assertEqual(table.splitlines()[0], "host_id\tssh_target\tcpu_units\tmemory_mib\tenabled")
+        self.assertIn("export ADAPTIVE_BACKFILL=0", default.read_text())
+
+        self.data["backfill"] = True
+        self.data["hosts"][0]["gpu_units"] = 2
+        self.data["hosts"][1].update(owner_idle_seconds=300, owner_active="suspend")
+        rendered = config.render(self.load(self.data), self.root / "opt-in")
+        rows = (rendered.parent / "adaptive-resources.tsv").read_text().splitlines()
+        self.assertEqual(rows[0].split("\t")[5:], ["gpu_units", "owner_idle_seconds", "owner_active"])
+        self.assertEqual(rows[1].split("\t")[5:], ["2", "0", "hold"])
+        self.assertEqual(rows[2].split("\t")[5:], ["0", "300", "suspend"])
+        self.assertIn("export ADAPTIVE_BACKFILL=1", rendered.read_text())
+
+    def test_invalid_opt_in_settings_are_rejected(self):
+        for change in ({"backfill": "yes"},):
+            data = copy.deepcopy(self.data)
+            data.update(change)
+            with self.assertRaises(ValueError):
+                self.load(data)
+        for host_change in ({"gpu_units": -1}, {"gpu_units": True}, {"owner_idle_seconds": 30},
+                            {"owner_active": "suspend"}, {"owner_idle_seconds": 300, "owner_active": "kill"}):
+            data = copy.deepcopy(self.data)
+            data["hosts"][0].update(host_change)
+            with self.assertRaises(ValueError, msg=str(host_change)):
+                self.load(data)
+
     def test_render_requires_an_existing_shared_directory(self):
         shared = self.root / "data"
         self.data["shared_root"] = str(shared)

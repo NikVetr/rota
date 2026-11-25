@@ -1,6 +1,9 @@
 # Parallel workers
 
 A lightweight SSH job scheduler for small, trusted macOS/Linux clusters.
+
+![Three queues share four hosts. Each square is one CPU unit held by a running job; a higher-priority queue fills slots as other jobs finish.](docs/figures/loop-pool-overview.gif)
+
 Run independent shell jobs with fixed workers, node-local shards, or an adaptive
 pool that shares CPU and memory budgets between queues. Jobs keep running when
 admission is paused; dependencies, failure holds, and audited recovery are explicit.
@@ -12,7 +15,13 @@ queue progress, shared storage, and network/block-device activity.
 The [illustrated operations guide](docs/operations.md#submit-your-own-queue)
 traces one job through the scheduler and explains recovery after a worker loses
 contact. Its [ETA walkthrough](docs/operations.md#completion-estimates) shows
-how a queue can finish sooner when another queue releases its workers.
+how a queue can finish sooner when another queue releases its workers. See
+[how it compares](docs/comparison.md) with Slurm, Kubernetes, HTCondor and GNU Parallel.
+
+| Priorities | Leases | Forecasts |
+| --- | --- | --- |
+| ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose agent died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
+| Equal priorities share; a higher one takes each freed slot. No job is stopped. | An unreachable host starts nothing new once its lease runs out; its jobs keep running. | The pool ETA replays the scheduler, so B speeds up when A finishes. |
 
 ## Set up another cluster
 
@@ -28,7 +37,9 @@ how a queue can finish sooner when another queue releases its workers.
    host’s SSH target and its CPU and memory allowances. The scheduler, deployment
    tools and dashboard use settings generated from the inventory. Job commands,
    inputs and outputs belong to individual project queues. Keep SSH keys in
-   your SSH configuration.
+   your SSH configuration. Optional settings turn on backfill, GPU units, and
+   holding or suspending work while a machine's owner is at the keyboard
+   ([opt-in features](docs/operations.md#opt-in-host-and-queue-features)).
 3. From the coordinator, run `./doctor cluster.local.json`. It checks each SSH
    route, runtime tools, writable storage and a marker shared with the coordinator.
    Then generate the configuration and activate it in this shell:

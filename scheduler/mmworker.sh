@@ -45,6 +45,11 @@ ADAPTIVE_RESERVATION_FILE="${10:-}"
 ADAPTIVE_QUEUE_SHA256="${11:-}"
 ADAPTIVE_MODE=0
 ADAPTIVE_RESULT_WRITTEN=0
+# Devices the agent assigned to this reservation (opt-in gpu_units); jobs see them as CUDA devices.
+if [ -n "${PW_GPU_DEVICES:-}" ]; then
+  export PW_GPU_DEVICES
+  export CUDA_VISIBLE_DEVICES="$PW_GPU_DEVICES"
+fi
 ADAPTIVE_CLAIMED_JOB_ID=""
 
 publish_adaptive_result() {
@@ -353,6 +358,46 @@ record_share_interruption() {
     > "$LOG_DIR/share-interrupted/job_${JOB_ID}.${HOST_NAME}"
 }
 
+# CPU accounting. `times` reports the user and system CPU of this shell's reaped children; the
+# job is the only child reaped between the two snapshots (the log-sync child is reaped later).
+# It must run in this shell: a $(...) subshell starts with no child usage.
+snapshot_child_cpu() {
+  times > "$1" 2>/dev/null
+}
+
+# Prints "user system" CPU seconds between two `times` snapshots.
+child_cpu_delta() {
+  awk '
+    function seconds(text, minutes) {
+      gsub(",", ".", text)
+      minutes = text
+      sub(/m.*/, "", minutes)
+      sub(/^[0-9]+m/, "", text)
+      sub(/s$/, "", text)
+      return minutes * 60 + text
+    }
+    FNR == 2 {
+      if (NR == FNR) { user0 = seconds($1); system0 = seconds($2) }
+      else { user1 = seconds($1); system1 = seconds($2); found = 1 }
+    }
+    END {
+      if (!found) exit 1
+      printf "%.3f %.3f\n", user1 - user0, system1 - system0
+    }
+  ' "$1" "$2"
+}
+
+# One write, no rename, like the share-interruption record. Readers ignore incomplete records.
+record_job_usage() {
+  local finished_epoch="$1" cpu_user="$2" cpu_system="$3"
+  mkdir -p "$LOG_DIR/usage" && printf '%s\n' \
+    "job_id=$JOB_ID" "host=$HOST_NAME" "reservation_id=$ADAPTIVE_RESERVATION_ID" \
+    "exit_code=$JOB_EXIT_CODE" "started_epoch=$job_started_epoch" \
+    "finished_epoch=$finished_epoch" "wall_seconds=$((finished_epoch - job_started_epoch))" \
+    "cpu_user_seconds=$cpu_user" "cpu_system_seconds=$cpu_system" \
+    > "$LOG_DIR/usage/job_${JOB_ID}.env"
+}
+
 stop_log_sync() {
   [ -n "${log_sync_pid:-}" ] || return 0
   kill -TERM "$log_sync_pid" 2>/dev/null || true
@@ -386,7 +431,7 @@ function process_job {
   local SLOT_ID="${1:-0}"
   local SLOT_DONE_FILE="$WORKER_STATE_DIR/${HOST_NAME}_slot${SLOT_ID}.done"
   local idle_loops=0
-  local local_job_log_file job_pid log_sync_pid=""
+  local local_job_log_file job_pid log_sync_pid="" cpu_before_file cpu_after_file job_cpu job_cpu_user job_cpu_system job_finished_epoch limit_note
 
   trap '
     if [ -n "${job_pid:-}" ] && kill -0 "$job_pid" 2>/dev/null; then
@@ -546,6 +591,9 @@ function process_job {
       return 1
     }
     job_started_epoch=$(date +%s)
+    cpu_before_file="${local_job_log_file}.cpu-before"
+    cpu_after_file="${local_job_log_file}.cpu-after"
+    snapshot_child_cpu "$cpu_before_file"
 
     # Run against a node-local log. Publish a bounded tail periodically for
     # live inspection, then overwrite it in place with the complete log.
@@ -558,13 +606,45 @@ function process_job {
       eval "$JOB_COMMAND" 7<&- >> "$local_job_log_file" 2>&1 &
     fi
     job_pid=$!
+    # The agent's memory-limit watchdog signals only the job's own process tree.
+    [ "$ADAPTIVE_MODE" -eq 0 ] || printf '%s\n' "$job_pid" > "${ADAPTIVE_RESERVATION_FILE%.env}.jobpid" || \
+      echo "$(date): Cannot record the PID of job $JOB_ID; its memory limit cannot be enforced." >> "$WORKER_LOG_FILE"
     if [ "$JOB_LOG_SYNC_SEC" -gt 0 ]; then
       sync_job_log 7<&- &
       log_sync_pid=$!
     fi
     wait "$job_pid"
     JOB_EXIT_CODE=$?
+    # A job the memory watchdog ended has failed, whatever its exit code: decide that before
+    # writing the usage record, done marker or result. Its own session holds any processes
+    # that outlived it, so end those too.
+    limit_note="${ADAPTIVE_RESERVATION_FILE%.env}.limit-kill"
+    if [ "$ADAPTIVE_MODE" -eq 1 ] && [ -f "$limit_note" ]; then
+      kill -KILL -- "-$job_pid" 2>/dev/null || true
+      [ "$JOB_EXIT_CODE" -ne 0 ] || JOB_EXIT_CODE=143
+    fi
+    job_finished_epoch=$(date +%s)
+    snapshot_child_cpu "$cpu_after_file"
     stop_log_sync
+    if job_cpu="$(child_cpu_delta "$cpu_before_file" "$cpu_after_file")"; then
+      job_cpu_user="${job_cpu% *}"
+      job_cpu_system="${job_cpu#* }"
+      awk -v u="$job_cpu_user" -v s="$job_cpu_system" -v w="$((job_finished_epoch - job_started_epoch))" \
+        -v code="$JOB_EXIT_CODE" 'BEGIN {
+          printf "CPU: user %.1f s, system %.1f s (%.4f CPU-hours); wall %d s; exit %d\n",
+            u, s, (u + s) / 3600, w, code
+        }' >> "$local_job_log_file"
+      if ! record_job_usage "$job_finished_epoch" "$job_cpu_user" "$job_cpu_system"; then
+        echo "$(date): Failed to record CPU usage for job $JOB_ID on $HOST_NAME." >> "$WORKER_LOG_FILE"
+      fi
+    else
+      echo "$(date): Could not measure CPU usage for job $JOB_ID on $HOST_NAME." >> "$WORKER_LOG_FILE"
+    fi
+    rm -f "$cpu_before_file" "$cpu_after_file"
+    if [ "$ADAPTIVE_MODE" -eq 1 ] && [ -f "$limit_note" ]; then
+      cat "$limit_note" >> "$local_job_log_file"
+      echo "$(date): Job $JOB_ID on $HOST_NAME: $(cat "$limit_note")" >> "$WORKER_LOG_FILE"
+    fi
     share_interrupted=0
     share_handle_revoked && share_interrupted=1
     exec 7<&-

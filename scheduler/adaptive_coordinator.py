@@ -155,9 +155,19 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
             not isinstance(queue, str) or not queue for queue in blocked
         ):
             raise SnapshotError("blocked_queues must be a list of queue IDs")
+        releases = raw.get("release_estimates", [])
+        if not isinstance(releases, list) or any(
+            not isinstance(item, list) or len(item) != 3
+            or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in item)
+            for item in releases
+        ):
+            raise SnapshotError("release_estimates must be [seconds, cpu, memory] lists")
         hosts[host_id] = {
             "cpu": cpu,
             "memory": memory,
+            # Optional device units (GPUs); absent means none, as before devices existed.
+            "gpu": _integer(raw, "gpu_units", 0) if "gpu_units" in raw else 0,
+            "releases": sorted(tuple(item) for item in releases),
             "live_cpu": min(cpu, _integer(raw, "live_cpu_units", 0))
             if "live_cpu_units" in raw else cpu,
             "live_memory": min(memory, _integer(raw, "live_memory_mib", 0))
@@ -189,12 +199,15 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
             "cpu": _integer(raw, "cpu_units_per_job", 1),
             "memory": _integer(raw, "memory_mib_per_job", 1),
             "io": _integer(raw, "shared_io_units_per_job", 0),
+            "gpu": _integer(raw, "gpu_units_per_job", 0) if "gpu_units_per_job" in raw else 0,
             "priority": _integer(raw, "schedule_priority"),
             "host_priorities": overrides,
             "max": _integer(raw, "max_workers", 0),
             "pending": _integer(raw, "pending_lines", 0),
             "admission": admission,
         }
+        if "backfill_runtime_seconds" in raw:
+            queues[queue_id]["backfill_runtime"] = _integer(raw, "backfill_runtime_seconds", 0)
         if "early_sample_remaining" in raw:
             remaining = _integer(raw, "early_sample_remaining", 0)
             if remaining > 2:
@@ -263,6 +276,7 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
             host["enabled"]
             and queue["cpu"] <= host["cpu"]
             and queue["memory"] <= host["memory"]
+            and queue["gpu"] <= host["gpu"]
             and queue["io"] <= shared_io_capacity
             for host in hosts.values()
         ):
@@ -272,6 +286,10 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
         hosts, queues, envelopes, observed, observed_memory, envelope_memory, cursor,
         shared_io_capacity,
     )
+
+
+# A backfill job's forecast runtime must end this long before the reservation could fit.
+BACKFILL_MARGIN_SECONDS = 30
 
 
 def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -286,6 +304,7 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
 
     current_cpu = {host: 0 for host in host_ids}
     current_memory = {host: 0 for host in host_ids}
+    current_gpu = {host: 0 for host in host_ids}
     current_io = 0
     queue_envelope = {queue: 0 for queue in queue_ids}
     for (host, queue), count in envelopes.items():
@@ -297,12 +316,20 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
             + (count - observed_count) * envelope_memory[(host, queue)]
         )
         current_io += count * profile["io"]
+        current_gpu[host] += count * profile["gpu"]
         queue_envelope[queue] += count
 
     future_cpu = {host: 0 for host in host_ids}
     future_memory = {host: 0 for host in host_ids}
+    future_gpu = {host: 0 for host in host_ids}
     future_io = 0
     drain_reservations: list[dict[str, Any]] = []
+    # Backfill (opt-in): capacity earmarked for a drain reservation may run a job that is
+    # forecast to finish before the reservation could fit anyway.
+    backfill = _boolean(snapshot, "backfill", False)
+    earmark = {host: [0, 0] for host in host_ids}
+    ready_in: dict[str, int] = {}
+    backfilled: dict[tuple[str, str], int] = {}
     # Every (queue, host) pair has its own level; a queue competes on a host
     # only at that host's level.
     level = {
@@ -345,6 +372,38 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
     def total_target(queue_id: str) -> int:
         return sum(targets[host][queue_id] for host in host_ids)
 
+    def relief(queue_id: str, host_id: str) -> tuple[int, int]:
+        """The earmark a backfill-eligible job may use on a host holding a drain reservation."""
+        runtime = queues[queue_id].get("backfill_runtime")
+        if (
+            not backfill or runtime is None or host_id not in ready_in
+            or runtime + BACKFILL_MARGIN_SECONDS > ready_in[host_id]
+        ):
+            return 0, 0
+        return earmark[host_id][0], earmark[host_id][1]
+
+    def uses_relief(queue_id: str, host_id: str) -> bool:
+        queue = queues[queue_id]
+        return (
+            future_cpu[host_id] + queue["cpu"] > hosts[host_id]["live_cpu"]
+            or future_memory[host_id] + queue["memory"] > hosts[host_id]["live_memory"]
+        )
+
+    def ready_seconds(host_id: str, cpu_deficit: int, memory_deficit: int) -> int:
+        """When enough running work on a host is forecast to end to cover a deficit. Work
+        without an estimate may end at any moment; a deficit known work cannot cover is 0."""
+        releases = hosts[host_id]["releases"]
+        freed_cpu = max(0, current_cpu[host_id] - sum(item[1] for item in releases))
+        freed_memory = max(0, current_memory[host_id] - sum(item[2] for item in releases))
+        if freed_cpu >= cpu_deficit and freed_memory >= memory_deficit:
+            return 0
+        for seconds, cpu, memory in releases:
+            freed_cpu += cpu
+            freed_memory += memory
+            if freed_cpu >= cpu_deficit and freed_memory >= memory_deficit:
+                return seconds
+        return 0
+
     def candidates(queue_id: str, priority: Optional[int] = None) -> list[tuple[float, str, bool]]:
         queue = queues[queue_id]
         result: list[tuple[float, str, bool]] = []
@@ -358,15 +417,20 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
             cpu = current_cpu[host_id] + (queue["cpu"] if additional else 0)
             memory = current_memory[host_id] + (queue["memory"] if additional else 0)
             io = current_io + (queue["io"] if additional else 0)
+            gpu = current_gpu[host_id] + (queue["gpu"] if additional else 0)
             if (
                 cpu > hosts[host_id]["live_cpu"]
                 or memory > hosts[host_id]["live_memory"]
                 or io > io_capacity
+                or gpu > hosts[host_id]["gpu"]
             ):
                 continue
-            if future_cpu[host_id] + queue["cpu"] > hosts[host_id]["live_cpu"]:
+            if future_gpu[host_id] + queue["gpu"] > hosts[host_id]["gpu"]:
                 continue
-            if future_memory[host_id] + queue["memory"] > hosts[host_id]["live_memory"]:
+            relief_cpu, relief_memory = relief(queue_id, host_id)
+            if future_cpu[host_id] + queue["cpu"] > hosts[host_id]["live_cpu"] + relief_cpu:
+                continue
+            if future_memory[host_id] + queue["memory"] > hosts[host_id]["live_memory"] + relief_memory:
                 continue
             if future_io + queue["io"] > io_capacity:
                 continue
@@ -383,10 +447,12 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
         targets[host_id][queue_id] += 1
         future_cpu[host_id] += profile["cpu"]
         future_memory[host_id] += profile["memory"]
+        future_gpu[host_id] += profile["gpu"]
         future_io += profile["io"]
         if additional:
             current_cpu[host_id] += profile["cpu"]
             current_memory[host_id] += profile["memory"]
+            current_gpu[host_id] += profile["gpu"]
             current_io += profile["io"]
 
     # One early slot across the pool. An unacknowledged grant also owns
@@ -422,6 +488,9 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
                 if not choices:
                     continue
                 _, host_id, additional = choices[0]
+                if backfill and uses_relief(queue_id, host_id):
+                    key = (host_id, queue_id)
+                    backfilled[key] = backfilled.get(key, 0) + 1
                 assign(queue_id, host_id, additional)
                 if additional:
                     cursor[str(priority)] = queue_id
@@ -447,6 +516,8 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
                     continue
                 if future_io + profile["io"] > io_capacity:
                     continue
+                if future_gpu[host_id] + profile["gpu"] > host["gpu"]:
+                    continue
                 cpu_deficit = max(
                     0, current_cpu[host_id] + profile["cpu"] - host["live_cpu"]
                 )
@@ -454,18 +525,30 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
                     0, current_memory[host_id] + profile["memory"] - host["live_memory"]
                 )
                 io_deficit = max(0, current_io + profile["io"] - io_capacity)
+                gpu_deficit = max(0, current_gpu[host_id] + profile["gpu"] - host["gpu"])
                 deficit = max(
                     cpu_deficit / host["live_cpu"],
                     memory_deficit / host["live_memory"],
                     io_deficit / max(1, io_capacity),
+                    gpu_deficit / max(1, host["gpu"]),
                 )
                 choices.append((deficit, host_id))
             if choices:
                 _, host_id = min(choices)
                 future_cpu[host_id] += profile["cpu"]
                 future_memory[host_id] += profile["memory"]
+                future_gpu[host_id] += profile["gpu"]
                 future_io += profile["io"]
                 drain_reservations.append({"host_id": host_id, "queue_id": queue_id})
+                if backfill:
+                    earmark[host_id][0] += profile["cpu"]
+                    earmark[host_id][1] += profile["memory"]
+                    ready = ready_seconds(
+                        host_id,
+                        current_cpu[host_id] + profile["cpu"] - hosts[host_id]["live_cpu"],
+                        current_memory[host_id] + profile["memory"] - hosts[host_id]["live_memory"],
+                    )
+                    ready_in[host_id] = min(ready_in.get(host_id, ready), ready)
                 break
 
     limits: dict[str, list[str]] = {}
@@ -485,6 +568,9 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
             reasons.append("cpu")
         if available and not any(current_memory[h] + profile["memory"] <= hosts[h]["live_memory"] for h in available):
             reasons.append("memory")
+        if profile["gpu"] and available and not any(
+                current_gpu[h] + profile["gpu"] <= hosts[h]["gpu"] for h in available):
+            reasons.append("gpu")
         if not reasons and not candidates(queue_id):
             reasons.append("placement")
         limits[queue_id] = reasons
@@ -499,6 +585,13 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
         "drain_reservations": drain_reservations,
         "limits": limits,
         **({"early_sample": sample} if sample else {}),
+        **({"backfill": {
+            "ready_seconds": {host: ready_in[host] for host in sorted(ready_in)},
+            "targets": [
+                {"host_id": host, "queue_id": queue, "count": count}
+                for (host, queue), count in sorted(backfilled.items())
+            ],
+        }} if backfill else {}),
         "cursor": {key: cursor[key] for key in sorted(cursor, key=int)},
     }
 
@@ -619,15 +712,18 @@ def _pace_start_grants(
 ALLOCATION_HEADER = (
     "queue_id\ttarget_running\tstart_grants\tcpu_units_per_job\tmemory_mib_per_job\t"
     "shared_io_units_per_job\toriginal_queue_file\teditable_queue_file\t"
-    "model_dir\tlog_dir\tlock_dir\ttag_clean\tqueue_sha256"
+    "model_dir\tlog_dir\tlock_dir\ttag_clean\tqueue_sha256\tgpu_units_per_job\tmemory_limit_mib"
 )
 STATUS_HEADER = (
     "record_type\tpool_id\thost_id\tgeneration\tadmission\treservation_id\t"
     "queue_id\tstate\tpid\tcpu_units\tmemory_mib\tobserved_memory_mib\t"
     "charged_memory_mib\tmessage\t"
     "live_cpu_units\tlive_memory_mib\tsmbd_cpu_tenths\ttelemetry_state\tresource_sample_epoch\t"
-    "smb_bytes\tcurrent_memory_mib\tsustained_memory_mib"
+    "smb_bytes\tcurrent_memory_mib\tsustained_memory_mib\towner_state\towner_idle_seconds"
 )
+OWNER_STATES = {"off", "idle", "active", "unknown", "suspended"}
+# An owner at the host (or whose activity cannot be read) gets no new work there.
+OWNER_BLOCKING = {"active", "unknown", "suspended"}
 STATUS_COLUMNS = STATUS_HEADER.count("\t") + 1
 SMB_STUCK_BYTES_PER_SECOND = 65536
 SMB_STUCK_SECONDS = 60
@@ -707,7 +803,9 @@ def _load_hosts(path: Path) -> dict[str, dict[str, Any]]:
     except (OSError, csv.Error) as error:
         raise SnapshotError(f"cannot read host resources {path}: {error}") from error
     expected = ["host_id", "ssh_target", "cpu_units", "memory_mib", "enabled"]
-    if not rows or list(rows[0]) != expected:
+    # Opt-in host settings add these columns only when an inventory sets one.
+    options = ["gpu_units", "owner_idle_seconds", "owner_active"]
+    if not rows or list(rows[0]) not in (expected, expected + options):
         raise SnapshotError(f"{path} must have the exact adaptive resource header")
     hosts: dict[str, dict[str, Any]] = {}
     targets: set[str] = set()
@@ -728,11 +826,22 @@ def _load_hosts(path: Path) -> dict[str, dict[str, Any]]:
             raise SnapshotError(f"invalid resource budget for {host_id}") from error
         if cpu <= 0 or memory <= 0:
             raise SnapshotError(f"resource budgets must be positive for {host_id}")
+        try:
+            gpu = int(row.get("gpu_units") or 0)
+            owner_idle = int(row.get("owner_idle_seconds") or 0)
+        except ValueError as error:
+            raise SnapshotError(f"invalid host options for {host_id}") from error
+        owner_active = row.get("owner_active") or "hold"
+        if gpu < 0 or (owner_idle and not 60 <= owner_idle <= 86400) or owner_active not in {"hold", "suspend"}:
+            raise SnapshotError(f"invalid host options for {host_id}")
         hosts[host_id] = {
             "ssh_target": ssh_target,
             "cpu_units": cpu,
             "memory_mib": memory,
             "enabled": row["enabled"] == "1",
+            "gpu_units": gpu,
+            "owner_idle_seconds": owner_idle,
+            "owner_active": owner_active,
         }
     return hosts
 
@@ -880,6 +989,8 @@ CONTROL_KEYS = {
     "max_workers", "updated_epoch",
 }
 PROFILE_KEYS = {"cpu_units_per_job", "memory_mib_per_job", "shared_io_units_per_job"}
+# Present only when used, so queues without devices keep their original profile.
+OPTIONAL_PROFILE_KEYS = {"gpu_units_per_job"}
 
 
 def _accounting_profiles(state_root: Path, pool_id: str) -> dict[str, dict[str, int]]:
@@ -893,10 +1004,12 @@ def _accounting_profiles(state_root: Path, pool_id: str) -> dict[str, dict[str, 
         raise SnapshotError("invalid queue accounting profiles")
     for queue_id, profile in profiles.items():
         if (not isinstance(queue_id, str) or not IDENTIFIER.fullmatch(queue_id)
-                or not isinstance(profile, dict) or set(profile) != PROFILE_KEYS):
+                or not isinstance(profile, dict) or set(profile) - OPTIONAL_PROFILE_KEYS != PROFILE_KEYS):
             raise SnapshotError("invalid queue accounting profile")
         for key in PROFILE_KEYS:
             _integer(profile, key, 0 if key == "shared_io_units_per_job" else 1)
+        for key in OPTIONAL_PROFILE_KEYS & set(profile):
+            _integer(profile, key, 1)
     return profiles
 
 
@@ -959,6 +1072,13 @@ def _load_queue(
         key: _env_int(resources, key, 0 if key == "shared_io_units_per_job" else 1)
         for key in PROFILE_KEYS
     }
+    if "gpu_units_per_job" in resources:
+        costs["gpu_units_per_job"] = _env_int(resources, "gpu_units_per_job", 1)
+    memory_limit = (
+        _env_int(resources, "memory_limit_mib", 1) if "memory_limit_mib" in resources else 0
+    )
+    if memory_limit and memory_limit < costs["memory_mib_per_job"]:
+        raise SnapshotError(f"memory limit is below the declared memory: {queue_id}")
     if profiles is not None:
         if queue_id in profiles and profiles[queue_id] != costs:
             raise SnapshotError(f"immutable resource profile changed: {queue_id}")
@@ -1050,6 +1170,7 @@ def _load_queue(
         "requested_memory_mib_per_job": profile["memory_mib_per_job"],
         "calibration_policy": calibration_policy,
         "initial_memory_mib_per_job": costs["memory_mib_per_job"],
+        "memory_limit_mib": memory_limit,
         "control_generation": _env_int(control, "generation", 1),
         "total_jobs": _env_int(run_meta, "total_jobs", 1),
         "display_admission": effective_admission,
@@ -1130,7 +1251,7 @@ def _parse_status(
             continue
         if columns[0] != "reservation" or not columns[5] or columns[5] in reservation_ids:
             raise SnapshotError(f"invalid reservation status from {host_id}")
-        if any(columns[13:20]):
+        if any(columns[13:20]) or any(columns[22:24]):
             raise SnapshotError(f"reservation status contains agent telemetry from {host_id}")
         queue_id = columns[6]
         if queue_id not in queues or columns[7] not in {"starting", "running", "uncertain"}:
@@ -1170,8 +1291,15 @@ def _parse_status(
         uncertain = uncertain or columns[7] == "uncertain"
     if agent is None:
         raise SnapshotError(f"missing agent status from {host_id}")
-    if any(agent[20:]):
+    if any(agent[20:22]):
         raise SnapshotError(f"agent status contains reservation memory from {host_id}")
+    owner_state = agent[22]
+    try:
+        owner_idle = int(agent[23])
+    except ValueError as error:
+        raise SnapshotError(f"invalid owner activity from {host_id}") from error
+    if owner_state not in OWNER_STATES or owner_idle < -1:
+        raise SnapshotError(f"invalid owner activity from {host_id}")
     try:
         generation = int(agent[3])
         live_cpu = int(agent[14])
@@ -1198,7 +1326,7 @@ def _parse_status(
         "uncertain": uncertain, "blocked_queues": blocked_queues, "live_cpu_units": live_cpu,
         "live_memory_mib": live_memory, "smbd_cpu_tenths": smbd_cpu_tenths,
         "telemetry_state": agent[17], "resource_sample_epoch": sample_epoch,
-        "smb_bytes": smb_bytes,
+        "smb_bytes": smb_bytes, "owner_state": owner_state, "owner_idle_seconds": owner_idle,
     }
 
 
@@ -1235,6 +1363,111 @@ def _remote_dir(pool_id: str) -> str:
     return f'"$HOME/.parallel-workers/adaptive/{pool_id}"'
 
 
+def _recent(mtime: float) -> bool:
+    """A directory changed this recently may gain entries without a new mtime (coarse clocks)."""
+    return time.time() - mtime < 2
+
+
+BACKFILL_SAMPLE_JOBS = 30
+BACKFILL_MIN_SAMPLES = 5
+
+
+def job_timing(claims_dir: Path, done_dir: Path, cache: dict[str, Any]) -> dict[str, Any]:
+    """Recent completed durations (done mtime - claim mtime) and the claim time of each claimed,
+    unfinished job by reservation ID. Claim and done records are immutable, so both are cached."""
+    entry = cache.setdefault(str(claims_dir), {"signature": None, "durations": {}, "owners": {}})
+    try:
+        stat = done_dir.stat()
+        signature: Optional[tuple[int, int]] = (stat.st_ino, stat.st_mtime_ns)
+        changed_at = stat.st_mtime
+    except FileNotFoundError:
+        signature, changed_at = None, 0.0
+    if signature is not None and (entry["signature"] != signature or _recent(changed_at)):
+        with os.scandir(done_dir) as items:
+            for item in items:
+                name = item.name
+                if not name.startswith("job_") or not name.endswith(".done") or name in entry["durations"]:
+                    continue
+                try:
+                    finished = item.stat(follow_symlinks=False).st_mtime
+                    claimed = (claims_dir / f"job_{name[4:-5]}.claim").stat().st_mtime
+                    # A done time before its claim (clock skew between hosts) is never a sample.
+                    entry["durations"][name] = (finished, finished - claimed) if finished >= claimed else None
+                except OSError:
+                    entry["durations"][name] = None  # no claim time: never a sample
+        entry["signature"] = signature
+    done = {name[:-5] for name in entry["durations"]}
+    try:
+        with os.scandir(claims_dir) as items:
+            unfinished = [item for item in items
+                          if item.name.endswith(".claim") and item.name[:-6] not in done]
+    except FileNotFoundError:
+        unfinished = []
+    for item in unfinished:
+        if item.name in entry["owners"]:
+            continue
+        try:
+            owner = json.loads((Path(item.path) / "owner.json").read_text())
+            entry["owners"][item.name] = (str(owner["reservation_id"]), item.stat().st_mtime)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # being created; read it on a later tick
+    recent = sorted(value for value in entry["durations"].values() if value is not None)
+    return {
+        "durations": [duration for _, duration in recent[-BACKFILL_SAMPLE_JOBS:]],
+        "starts": {
+            reservation: started for name, (reservation, started) in entry["owners"].items()
+            if name[:-6] not in done
+        },
+    }
+
+
+def nearest_rank(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
+
+
+USAGE_KEYS = {"job_id", "exit_code", "cpu_user_seconds", "cpu_system_seconds"}
+# Finished queues stay indexed this long, so readers that poll less often than short queues
+# finish still find each one's final status, including its CPU totals.
+RETIRED_INDEX_SECONDS = 7 * 86400
+
+
+def usage_totals(batch_dir: Path, cache: dict[str, Any]) -> dict[str, Any]:
+    """Sum the CPU time workers recorded in usage/job_ID.env. Records are immutable once complete,
+    so the directory is rescanned only when it changes or a record was still being written."""
+    usage_dir = batch_dir / "usage"
+    entry = cache.setdefault(str(batch_dir), {"signature": None, "records": {}})
+    try:
+        stat = usage_dir.stat()
+    except FileNotFoundError:
+        return {"state": "ok", "jobs": 0, "succeeded": 0.0, "failed": 0.0}
+    signature = (stat.st_ino, stat.st_mtime_ns)
+    if entry["signature"] != signature or _recent(stat.st_mtime):
+        complete = True
+        with os.scandir(usage_dir) as entries:
+            for item in entries:
+                if (not item.name.startswith("job_") or not item.name.endswith(".env")
+                        or item.name in entry["records"] or not item.is_file(follow_symlinks=False)):
+                    continue
+                try:
+                    values = _parse_env(Path(item.path).read_text(), Path(item.path), USAGE_KEYS)
+                    record = (
+                        values["exit_code"] == "0",
+                        float(values["cpu_user_seconds"]) + float(values["cpu_system_seconds"]),
+                    )
+                except (OSError, ValueError, SnapshotError):
+                    complete = False  # still being written; read it on the next tick
+                    continue
+                entry["records"][item.name] = record
+        entry["signature"] = signature if complete else None
+    records = entry["records"].values()
+    return {
+        "state": "ok", "jobs": len(records),
+        "succeeded": sum(cpu for ok, cpu in records if ok),
+        "failed": sum(cpu for ok, cpu in records if not ok),
+    }
+
+
 class Coordinator:
     def __init__(
         self, state_root: Path, pool_id: str, resources_file: Path,
@@ -1242,6 +1475,7 @@ class Coordinator:
         io_pressure_host: Optional[str] = None, smbd_cpu_limit_pct: int = 400,
         cpu_tolerance_pct: int = 10,
         start_interval_seconds: float = 4,
+        backfill: bool = False,
     ) -> None:
         if not IDENTIFIER.fullmatch(pool_id):
             raise SnapshotError("pool_id must contain only letters, numbers, dot, underscore, or dash")
@@ -1272,6 +1506,9 @@ class Coordinator:
         self.lease_seconds = lease_seconds
         self.ssh_timeout = max(5.0, min(30.0, tick_seconds))
         self.queue_cache: dict[str, Any] = {}
+        self.usage_cache: dict[str, Any] = {}
+        self.backfill = backfill
+        self.timing_cache: dict[str, Any] = {}
         self.quarantined: dict[str, str] = {}
         self.quarantine_published = False
         self.memory_calibration: Optional[dict[str, Any]] = None
@@ -1643,6 +1880,42 @@ class Coordinator:
                     start_new_session=True,
                 )
 
+    def _backfill_estimates(
+        self, queues: dict[str, dict[str, Any]], polled: dict[str, dict[str, Any]], now: float,
+    ) -> tuple[dict[str, list[list[int]]], dict[str, int]]:
+        """Per-host release estimates for running jobs and per-queue backfill runtimes."""
+        runtimes: dict[str, int] = {}
+        optimistic: dict[str, float] = {}
+        starts: dict[str, float] = {}
+        live: set[str] = set()
+        for queue_id, queue in queues.items():
+            registration = queue["registration"]
+            claims_dir = Path(registration["log_dir"]) / "claims"
+            live.add(str(claims_dir))
+            try:
+                timing = job_timing(claims_dir, Path(registration["batch_dir"]) / "done", self.timing_cache)
+            except OSError:
+                continue  # no estimate: the queue neither backfills nor has known release times
+            starts.update(timing["starts"])
+            if len(timing["durations"]) >= BACKFILL_MIN_SAMPLES:
+                runtimes[queue_id] = math.ceil(nearest_rank(timing["durations"], 0.9))
+                optimistic[queue_id] = nearest_rank(timing["durations"], 0.1)
+        for stale in set(self.timing_cache) - live:
+            del self.timing_cache[stale]
+        releases: dict[str, list[list[int]]] = {}
+        for host_id, status in polled.items():
+            for reservation, queue_id in status.get("reservation_ids", {}).items():
+                if queue_id not in optimistic or reservation not in starts:
+                    continue  # unknown: may end at any moment
+                remaining = max(0, int(optimistic[queue_id] - (now - starts[reservation])))
+                profile = queues[queue_id]["allocator"]
+                charged = status.get("reservation_charges_mib", {}).get(reservation, 0)
+                releases.setdefault(host_id, []).append([
+                    remaining, profile["cpu_units_per_job"],
+                    max(charged, profile["memory_mib_per_job"]),
+                ])
+        return releases, runtimes
+
     def _allocation_text(
         self, host_id: str, targets: dict[str, int], queues: dict[str, dict[str, Any]],
         start_grants: dict[str, int],
@@ -1660,6 +1933,7 @@ class Coordinator:
                 registration["original_queue_file"], registration["editable_queue_file"],
                 registration["model_dir"], registration["log_dir"], registration["lock_dir"],
                 registration["tag_clean"], registration["queue_sha256"],
+                str(profile.get("gpu_units_per_job", 0)), str(queue.get("memory_limit_mib", 0)),
             ]
             for field in fields:
                 _safe_value(field, f"allocation value for {host_id}/{queue_id}")
@@ -1827,6 +2101,7 @@ class Coordinator:
                     if self._pool_state() != "ACTIVE":
                         return 0
                     return retry_verified_tail(queue["registration"], queue["job_ids"])
+                self._index_retired(queue["registration"])
                 queue["registration_path"].unlink()
             return 0
         finally:
@@ -1835,6 +2110,23 @@ class Coordinator:
                 lock.rmdir()
             except OSError as error:
                 raise SnapshotError(f"cannot release scheduler transition lock: {error}") from error
+
+    def _index_retired(self, registration: dict[str, str]) -> None:
+        """Point at a retiring queue's batch, whose status.env keeps its final totals. Reporting
+        only: a failure is logged and never blocks retirement."""
+        retired = self.state_root / "retired"
+        now = time.time()
+        try:
+            retired.mkdir(exist_ok=True)
+            _atomic_text(retired / f"{registration['queue_id']}.env", "\n".join([
+                f"queue_id={registration['queue_id']}", f"tag_clean={registration['tag_clean']}",
+                f"batch_dir={registration['batch_dir']}", f"retired_epoch={int(now)}", "",
+            ]), 0o644)
+            for entry in retired.glob("*.env"):
+                if now - entry.stat().st_mtime > RETIRED_INDEX_SECONDS:
+                    entry.unlink(missing_ok=True)
+        except (OSError, KeyError) as error:
+            print(f"adaptive coordinator: cannot index retired queue: {error}", file=sys.stderr)
 
     def _pool_state(self) -> str:
         pool = _read_env(self.state_root / "pool.env", {"pool_id", "state"})
@@ -1895,6 +2187,9 @@ class Coordinator:
         accounting.update(queues)
         for stale in set(self.queue_cache) - set(queues):
             del self.queue_cache[stale]
+        live_batches = {str(Path(queue["registration"]["batch_dir"])) for queue in queues.values()}
+        for stale in set(self.usage_cache) - live_batches:
+            del self.usage_cache[stale]
         states = {host_id: self._host_state(host_id) for host_id in self.hosts}
         for state in states.values():
             for queue_id, queue in accounting.items():
@@ -2035,15 +2330,17 @@ class Coordinator:
             "host_id": host_id,
             "cpu_units": host["cpu_units"],
             "memory_mib": host["memory_mib"],
+            "gpu_units": host.get("gpu_units", 0),
             "live_cpu_units": live_capacities[host_id][0],
             "live_memory_mib": live_capacities[host_id][1],
             "enabled": host["enabled"],
             "reachable": bool(polled[host_id]["reachable"]),
-            # An away host finishes its running jobs but starts none.
+            # An away host, or one whose owner is active, finishes its running jobs but starts none.
             "drain_only": bool(
                 polled[host_id]["uncertain"]
                 or polled[host_id]["telemetry_state"] != "ok"
                 or host_id in self.away
+                or polled[host_id].get("owner_state") in OWNER_BLOCKING
             ),
             "blocked_queues": list(polled[host_id].get("blocked_queues", {})),
         } for host_id, host in sorted(self.hosts.items())]
@@ -2078,7 +2375,16 @@ class Coordinator:
                     profile["early_sample_remaining"] = sum(
                         f"job_{job}.claim" not in seen for job in queues[q]["job_ids"][:2]
                     )
+        backfill_fields: dict[str, Any] = {}
+        if self.backfill:
+            releases, runtimes = self._backfill_estimates(queues, polled, time.time())
+            for host in allocator_hosts:
+                host["release_estimates"] = releases.get(host["host_id"], [])
+            for queue_id, runtime in runtimes.items():
+                allocator_queues[queue_id]["backfill_runtime_seconds"] = runtime
+            backfill_fields["backfill"] = True
         plan = allocate({
+            **backfill_fields,
             "schema_version": 1,
             # Without a verified cost, the missing queue may still consume any
             # amount of shared I/O. Zero-I/O work can continue on healthy hosts.
@@ -2237,6 +2543,11 @@ class Coordinator:
                     else "FINISHED_INCOMPLETE"
                 )
             calibration = queue.get("calibration_state", {})
+            # Accounting never blocks scheduling: an unreadable usage directory is only reported.
+            try:
+                usage = usage_totals(Path(queue["registration"]["batch_dir"]), self.usage_cache)
+            except OSError:
+                usage = {"state": "unavailable", "jobs": 0, "succeeded": 0.0, "failed": 0.0}
             status_text = "\n".join([
                 "schema_version=1", f"queue_id={queue_id}", f"lifecycle={lifecycle}",
                 f"admission={display_admission}",
@@ -2269,6 +2580,9 @@ class Coordinator:
                     f"{host_id}:{polled[host_id]['reservations'].get(queue_id, 0)}"
                     for host_id in sorted(enabled_ids)
                 ),
+                f"usage_state={usage['state']}", f"jobs_with_usage={usage['jobs']}",
+                f"cpu_seconds_succeeded={usage['succeeded']:.1f}",
+                f"cpu_seconds_failed={usage['failed']:.1f}",
                 f"updated_epoch={now}", "",
             ])
             batch_dir = Path(queue["registration"]["batch_dir"])
@@ -2338,7 +2652,10 @@ class Coordinator:
         )
         unavailable = {
             host_id: "unreachable" if not polled[host_id]["reachable"]
-            else "uncertain" if polled[host_id]["uncertain"] else "telemetry_or_share"
+            else "uncertain" if polled[host_id]["uncertain"]
+            else f"owner_{polled[host_id]['owner_state']}"
+            if polled[host_id].get("owner_state") in OWNER_BLOCKING
+            else "telemetry_or_share"
             for host_id in enabled_ids
             if host_id not in self.away and host_id not in open_hosts
         }
@@ -2492,6 +2809,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.add_argument("--host-id")
         parser.add_argument("--cpu-units", type=int, required=True)
         parser.add_argument("--memory-mib", type=int, required=True)
+        parser.add_argument("--gpu-units", type=int, default=0)
         args = parser.parse_args(arguments)
         try:
             if args.cpu_units <= 0 or args.memory_mib <= 0:
@@ -2506,7 +2824,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 budgets = _host_budgets(args.state_root, args.pool_id, hosts)
                 effective = [{**host, **budgets["hosts"].get(host_id, {})} for host_id, host in hosts.items()]
                 if not any(h["enabled"] and h["cpu_units"] >= args.cpu_units
-                           and h["memory_mib"] >= args.memory_mib for h in effective):
+                           and h["memory_mib"] >= args.memory_mib
+                           and h["gpu_units"] >= args.gpu_units for h in effective):
                     raise SnapshotError("this job profile does not fit any enabled adaptive host")
         except (OSError, SnapshotError) as error:
             print(f"adaptive coordinator: {error}", file=sys.stderr)
@@ -2525,6 +2844,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.add_argument("--smbd-cpu-limit-pct", type=int, default=400)
         parser.add_argument("--cpu-tolerance-pct", type=int, default=10)
         parser.add_argument("--start-interval-seconds", type=float, default=4)
+        parser.add_argument("--backfill", type=int, choices=(0, 1), default=0)
         parser.add_argument("--once", action="store_true")
         args = parser.parse_args(arguments)
         try:
@@ -2532,7 +2852,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 args.state_root, args.pool_id, args.resources_file,
                 args.shared_io_capacity, args.tick_seconds, args.lease_seconds,
                 args.io_pressure_host or None, args.smbd_cpu_limit_pct, args.cpu_tolerance_pct,
-                args.start_interval_seconds,
+                args.start_interval_seconds, bool(args.backfill),
             ).serve(args.once)
         except SnapshotError as error:
             print(f"adaptive coordinator: {error}", file=sys.stderr)

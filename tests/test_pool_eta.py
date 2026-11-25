@@ -127,5 +127,25 @@ class PoolEtaTests(unittest.TestCase):
         self.assertEqual(forecast(hosts, queues, running, 1, allocate, cursor), {"B": 120, "A": 660})
         self.assertEqual(forecast(hosts, queues, running, 2, allocate, cursor), {"B": 60, "A": 600})
 
+    def test_device_capacity_serializes_gpu_jobs(self):
+        jobs = queue(12, 60)
+        jobs.profile["gpu_units_per_job"] = 1
+        self.assertEqual(forecast([host(cpu=4, gpu_units=1)], {"A": jobs}, [], 4, allocate), {"A": 720})
+
+    def test_backfill_replay_lets_short_jobs_use_capacity_held_for_a_large_job(self):
+        def queues():
+            large = queue(1, 60, priority=90)
+            large.profile["cpu_units_per_job"] = 2
+            small = queue(10, 60)
+            small.profile["backfill_runtime_seconds"] = 60
+            return {"L": large, "S": small}
+        running = [Slot("node", "S", 600, 100)]
+        held = forecast([host()], queues(), running, 4, allocate)
+        backfilled = forecast([host()], queues(), running, 4, allocate, backfill=True)
+        # Held: S waits for L (600-660), then runs two at a time. Backfilled: S uses the held CPU
+        # while 60 s + 30 s margin still ends before L could start, leaving one job for after L.
+        self.assertEqual(held, {"L": 660, "S": 960})
+        self.assertEqual(backfilled, {"L": 660, "S": 720})
+
     def test_large_backlog_skips_equivalent_waves(self):
         self.assertEqual(forecast([host()], {"A":queue(1_000_001)}, [], 2, allocate), {"A":500001*60})

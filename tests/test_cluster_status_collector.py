@@ -47,7 +47,9 @@ IO = {"epoch": 1, "interface": "en0", "pool": {"state": "active", "capacity": 50
 SCHEDULER = {"schema": 1, "updated": 1.0, "pool": {"id": "p1", "state": "ACTIVE"},
              "hosts": [{"id": "far", "away": True}, {"id": "storage", "away": False}],
              "queues": [{"queue_id": "batch_00002_q", "tag": ACTIVE[16], "source_dir": "/home/u/repo",
-                         "submitted_by": "claude:abc"}],
+                         "submitted_by": "claude:abc", "usage": {"jobs": 2, "cpu_hours_succeeded": 1.5}}],
+             "retired_queues": [{"queue_id": "batch_00001_q", "tag": DONE[16],
+                                 "usage": {"jobs": 9, "cpu_hours_succeeded": 4.0}}],
              "commands": ["pool-drain"]}
 FAKE_SSH = r'''#!/usr/bin/env python3
 import json, os, sys, time
@@ -330,10 +332,13 @@ class CollectorTests(unittest.TestCase):
         # The coordinator's controls join queue rows by batch tag; hosts carry their away state.
         self.assertTrue(snapshot["scheduler"]["ok"])
         self.assertEqual(snapshot["scheduler"]["pool"]["id"], "p1")
-        main, fixed, _ = snapshot["queues"]
+        main, fixed, done = snapshot["queues"]
         self.assertEqual((main["control_id"], main["source_dir"], main["submitted_by"]),
                          ("batch_00002_q", "/home/u/repo", "claude:abc"))
         self.assertEqual((fixed["control_id"], fixed["submitted_by"]), (None, None))
+        # CPU usage comes from the live entry, or the retired one once a queue has finished.
+        self.assertEqual([queue["usage"] for queue in snapshot["queues"]],
+                         [{"jobs": 2, "cpu_hours_succeeded": 1.5}, None, {"jobs": 9, "cpu_hours_succeeded": 4.0}])
         self.assertEqual([host["away"] for host in snapshot["hosts"]], [None, True, False])
 
     def test_collect_command_matches_the_queue_pane(self):

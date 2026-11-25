@@ -257,6 +257,25 @@ class SnapshotTests(unittest.TestCase):
 
         self.assertIn("failed-job scan unavailable", state["failures_error"])
 
+    def test_retired_queues_keep_their_final_usage_for_a_week(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "adaptive"
+            (root / "retired").mkdir(parents=True)
+            now = int(time.time())
+            for name, retired in (("q0", now - 60), ("old", now - 8 * 86400)):
+                batch = Path(directory) / name
+                (batch / "adaptive").mkdir(parents=True)
+                (batch / "adaptive/status.env").write_text(
+                    "lifecycle=COMPLETED\njobs_with_usage=3\ncpu_seconds_succeeded=7200.0\n"
+                    "cpu_seconds_failed=36.0\nusage_state=ok\n")
+                (root / "retired" / f"{name}.env").write_text(
+                    f"queue_id={name}\ntag_clean=tag-{name}\nbatch_dir={batch}\nretired_epoch={retired}\n")
+            state = snapshot_module.snapshot(root, Path(directory) / "missing.sh")
+        retired, = state["retired_queues"]
+        self.assertEqual((retired["queue_id"], retired["tag"], retired["lifecycle"]), ("q0", "tag-q0", "COMPLETED"))
+        self.assertEqual(retired["usage"], {"jobs": 3, "cpu_hours_succeeded": 2.0, "cpu_hours_failed": 0.01,
+                                            "state": "ok"})
+
     def test_failed_jobs_and_holds_reach_each_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "adaptive"

@@ -466,6 +466,124 @@ class AllocatorTests(unittest.TestCase):
         self.assertEqual(plan["cursor"], {})
 
 
+class BackfillTests(unittest.TestCase):
+    """Opt-in backfill into capacity earmarked for a drain reservation."""
+
+    def scenario(self, *, backfill=True, runtime=60, releases=((100, 1, 2048), (700, 1, 2048)),
+                 low_running=2) -> dict:
+        # One 8-CPU, 8 GiB host. Two low jobs (2 GiB each) are finishing; nothing refills them.
+        # A whole-host high job cannot fit, so the host is reserved for it.
+        short = queue("short", 5, memory_mib_per_job=1024)
+        if runtime is not None:
+            short["backfill_runtime_seconds"] = runtime
+        return snapshot(
+            [host("h1", cpu=8, memory=8192, release_estimates=[list(item) for item in releases])],
+            [
+                queue("high", 20, memory_mib_per_job=8192, pending_lines=1),
+                queue("low", 10, memory_mib_per_job=2048, pending_lines=0),
+                short,
+            ],
+            reservations=[{"host_id": "h1", "queue_id": "low", "count": low_running}],
+            backfill=backfill,
+        )
+
+    def test_off_by_default_matches_today(self) -> None:
+        data = self.scenario(backfill=False)
+        plan = allocate(data)
+        self.assertEqual(plan["drain_reservations"], [{"host_id": "h1", "queue_id": "high"}])
+        self.assertEqual(plan["targets"]["h1"]["short"], 0)
+        self.assertNotIn("backfill", plan)
+        del data["backfill"]
+        self.assertEqual(allocate(data), plan)
+
+    def test_short_jobs_use_free_earmarked_capacity(self) -> None:
+        plan = allocate(self.scenario())
+        # Both running jobs must end before the high job fits: the later one at 700 s.
+        self.assertEqual(plan["backfill"]["ready_seconds"], {"h1": 700})
+        # Physically free now: 4 GiB, so four 1 GiB jobs.
+        self.assertEqual(plan["targets"]["h1"]["short"], 4)
+        self.assertEqual(plan["backfill"]["targets"],
+                         [{"host_id": "h1", "queue_id": "short", "count": 4}])
+        self.assertEqual(plan["drain_reservations"], [{"host_id": "h1", "queue_id": "high"}])
+
+    def test_runtime_must_end_a_margin_before_the_reservation_fits(self) -> None:
+        self.assertEqual(allocate(self.scenario(runtime=670))["targets"]["h1"]["short"], 4)
+        self.assertEqual(allocate(self.scenario(runtime=671))["targets"]["h1"]["short"], 0)
+
+    def test_queue_without_a_runtime_estimate_never_backfills(self) -> None:
+        self.assertEqual(allocate(self.scenario(runtime=None))["targets"]["h1"]["short"], 0)
+
+    def test_running_work_without_an_estimate_may_end_at_once(self) -> None:
+        # Only one of the two running jobs has an estimate; the other could end now, so
+        # the reservation could fit as soon as the known job ends at 100 s.
+        plan = allocate(self.scenario(runtime=71, releases=((100, 1, 2048),)))
+        self.assertEqual(plan["backfill"]["ready_seconds"], {"h1": 100})
+        self.assertEqual(plan["targets"]["h1"]["short"], 0)
+        self.assertEqual(
+            allocate(self.scenario(runtime=70, releases=((100, 1, 2048),)))["targets"]["h1"]["short"], 4)
+
+    def test_no_estimates_means_no_backfill(self) -> None:
+        plan = allocate(self.scenario(releases=()))
+        self.assertEqual(plan["backfill"]["ready_seconds"], {"h1": 0})
+        self.assertEqual(plan["targets"]["h1"]["short"], 0)
+
+    def test_current_capacity_still_binds(self) -> None:
+        # Three running low jobs leave 2 GiB free: backfill cannot exceed what is free now.
+        plan = allocate(self.scenario(
+            low_running=3, releases=((100, 1, 2048), (700, 1, 2048), (800, 1, 2048))))
+        self.assertEqual(plan["backfill"]["ready_seconds"], {"h1": 800})
+        self.assertEqual(plan["targets"]["h1"]["short"], 2)
+
+    def test_malformed_release_estimates_fail_loudly(self) -> None:
+        data = self.scenario()
+        data["hosts"][0]["release_estimates"] = [[100, 1]]
+        with self.assertRaises(MODULE.SnapshotError):
+            allocate(data)
+
+
+class GpuTests(unittest.TestCase):
+    """Optional device units: a fourth per-host resource that defaults to none."""
+
+    def test_gpu_jobs_run_only_where_devices_are_free(self) -> None:
+        plan = allocate(snapshot(
+            [host("cpu-only", cpu=8), host("gpu", cpu=8, gpu_units=2)],
+            [queue("train", 10, gpu_units_per_job=1, pending_lines=5)],
+        ))
+        self.assertEqual(plan["targets"]["gpu"]["train"], 2)
+        self.assertEqual(plan["targets"]["cpu-only"]["train"], 0)
+        self.assertEqual(plan["limits"]["train"], ["gpu"])
+
+    def test_running_gpu_jobs_are_charged(self) -> None:
+        plan = allocate(snapshot(
+            [host("gpu", cpu=8, gpu_units=2)],
+            [queue("train", 10, gpu_units_per_job=1, pending_lines=5), queue("cpu", 5)],
+            reservations=[{"host_id": "gpu", "queue_id": "train", "count": 2}],
+        ))
+        self.assertEqual(plan["targets"]["gpu"]["train"], 2)
+        self.assertEqual(plan["targets"]["gpu"]["cpu"], 6)  # CPU jobs still use the free cores
+
+    def test_queue_needing_more_devices_than_any_host_is_rejected(self) -> None:
+        with self.assertRaises(MODULE.SnapshotError):
+            allocate(snapshot([host("gpu", gpu_units=1)], [queue("big", gpu_units_per_job=2)]))
+
+    def test_large_gpu_job_reserves_a_drain_host(self) -> None:
+        plan = allocate(snapshot(
+            [host("gpu", cpu=8, gpu_units=2)],
+            [queue("pair", 20, gpu_units_per_job=2, pending_lines=1),
+             queue("single", 10, gpu_units_per_job=1, pending_lines=5)],
+            reservations=[{"host_id": "gpu", "queue_id": "single", "count": 1}],
+        ))
+        self.assertEqual(plan["drain_reservations"], [{"host_id": "gpu", "queue_id": "pair"}])
+        self.assertEqual(plan["targets"]["gpu"]["single"], 0)  # not refilled while it drains
+
+    def test_absent_device_fields_match_today(self) -> None:
+        data = snapshot([host("a", cpu=4)], [queue("q")])
+        explicit = json.loads(json.dumps(data))
+        explicit["hosts"][0]["gpu_units"] = 0
+        explicit["queues"][0]["gpu_units_per_job"] = 0
+        self.assertEqual(allocate(data), allocate(explicit))
+
+
 def random_snapshot(seed: int) -> dict:
     """Varied scalar-priority snapshot; uses only random(), whose stream is stable."""
     rng = random.Random(seed)
@@ -1317,14 +1435,14 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self, generation: int, admission: str = "drain-only", reservations: int = 0,
         live_cpu: int = 2, live_memory: int = 2048, smbd_cpu_tenths: int = 0,
         telemetry_state: str = "ok",
-        sample_epoch: int | None = None, smb_bytes: int = -1,
+        sample_epoch: int | None = None, smb_bytes: int = -1, owner_state: str = "off",
     ) -> None:
         agent = [
             "agent", self.pool_id, "host-1", str(generation), admission,
             "", "", "", "", "", "", "", "", "ready", str(live_cpu),
             str(live_memory), str(smbd_cpu_tenths), telemetry_state,
             str(int(time.time()) if sample_epoch is None else sample_epoch), str(smb_bytes),
-            "", "",
+            "", "", owner_state, "-1" if owner_state == "off" else "12",
         ]
         text = STATUS_HEADER + "\n" + "\t".join(agent) + "\n"
         for index in range(reservations):
@@ -1332,7 +1450,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 "reservation", self.pool_id, "host-1", str(generation), admission,
                 f"res-{index}", self.queue_id, "running", str(self.fake_agent.pid),
                 "1", "256", "0", "256", "", "", "", "", "", "", "",
-                "0", "0",
+                "0", "0", "", "",
             ]
             text += "\t".join(reservation) + "\n"
         (self.remote_state / "status.tsv").write_text(text, encoding="utf-8")
@@ -2147,6 +2265,10 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.run_once().returncode, 0)
         self.assertFalse(registration.exists())
         self.assertEqual(self.env_value(status, "lifecycle"), "COMPLETED")
+        # The retired index still leads readers to the final status and its CPU totals.
+        retired = self.state / "retired" / f"{self.queue_id}.env"
+        self.assertEqual(self.env_value(retired, "batch_dir"), str(self.batch))
+        self.assertIn("jobs_with_usage=", status.read_text())
 
     def test_terminal_registration_waits_for_current_control(self) -> None:
         self.assertEqual(self.run_once().returncode, 0)
@@ -2600,6 +2722,21 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 self.assertEqual(self.env_value(ready, "away_hosts"), "host-1" if away else "")
                 self.assertEqual(self.env_value(ready, "unavailable_hosts"), "")
 
+    def test_active_owner_gets_no_new_work(self) -> None:
+        for owner_state, blocked in (("off", False), ("idle", False), ("active", True),
+                                     ("unknown", True), ("suspended", True)):
+            with self.subTest(owner_state=owner_state):
+                self.assertEqual(self.run_once().returncode, 0)
+                generation = int(self.env_value(self.remote_state / "lease.env", "generation"))
+                self.write_agent_status(generation, "enabled", owner_state=owner_state)
+                result = self.run_once()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                generation = self.env_value(self.remote_state / "lease.env", "generation")
+                row = next(line for line in (self.remote_state / f"allocations.{generation}.tsv")
+                           .read_text().splitlines() if line.startswith("queue-1\t"))
+                self.assertEqual(row.split("\t")[1] == "0", blocked, row)
+                self.assertEqual(row.split("\t")[13:], ["0", "0"])  # no devices, no memory limit
+
     def test_set_host_state_windows_and_validation(self) -> None:
         with (self.state / "pool.env").open("a") as pool:
             pool.write(f"resources_file={self.resources}\n")
@@ -2770,7 +2907,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 "agent", self.pool_id, "host-1", "1", "drain-only",
                 "", "", "", "", "", "", "", "", "uncertain_reservation",
                 "2", "2048", "0", "ok", str(int(time.time())), "-1",
-                "", "",
+                "", "", "off", "-1",
             ]) + "\n",
             encoding="utf-8",
         )
@@ -2807,12 +2944,12 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                 "agent", self.pool_id, "host-1", "1", "enabled",
                 "", "", "", "", "", "", "", "", "ready", "2", "2048",
                 "0", "ok", str(int(time.time())), "-1",
-                "", "",
+                "", "", "off", "-1",
             ]) + "\n" + "\t".join([
                 "reservation", self.pool_id, "host-1", "1", "", "res-1",
                 self.queue_id, "running", "123", "1", "256", "512", "512",
                 "", "", "", "", "", "", "",
-                "0", "0",
+                "0", "0", "", "",
             ]) + "\n",
             encoding="utf-8",
         )
@@ -2830,7 +2967,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
                     "agent", self.pool_id, "host-1", "1", "drain-only",
                     "", "", "", "", "", "", "", "",
                     "uncertain_reservation", "2", "2048", "0", "ok", str(int(time.time())), "-1",
-                    "", "",
+                    "", "", "off", "-1",
                 ]) + "\n",
                 encoding="utf-8",
             )

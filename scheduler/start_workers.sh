@@ -18,6 +18,8 @@ MEMORY_CALIBRATION_SECONDS=0
 MEMORY_MIN_MIB_PER_JOB=""
 MEMORY_CALIBRATION_ENABLED=0
 SHARED_IO_UNITS_PER_JOB=""
+GPU_UNITS_PER_JOB=0
+MEMORY_LIMIT_MIB=""
 MAX_WORKERS=""
 ADAPTIVE_ADMISSION="enabled"
 AFTER_QUEUES=()
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --model_dir|--queue|--hosts_file|--run_name|--project|--execution_mode|--schedule_priority|\
         --cpu_units_per_job|--memory_mib_per_job|--shared_io_units_per_job|--max_workers|\
+        --gpu_units_per_job|--memory_limit_mib|\
         --memory_calibration_jobs|--memory_calibration_seconds|--memory_min_mib_per_job|\
         --adaptive_admission|--shard_progress_sync_sec|--after)
             [ "$#" -ge 2 ] || { echo "Error: $1 requires a value" >&2; exit 2; }
@@ -113,6 +116,14 @@ while [[ $# -gt 0 ]]; do
             SHARED_IO_UNITS_PER_JOB="$2"
             shift 2
             ;;
+        --gpu_units_per_job)
+            GPU_UNITS_PER_JOB="$2"
+            shift 2
+            ;;
+        --memory_limit_mib)
+            MEMORY_LIMIT_MIB="$2"
+            shift 2
+            ;;
         --max_workers)
             MAX_WORKERS="$2"
             shift 2
@@ -145,6 +156,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if { [ "$GPU_UNITS_PER_JOB" != 0 ] || [ -n "$MEMORY_LIMIT_MIB" ]; } &&
+    [ "$EXECUTION_MODE" != adaptive-shared-queue ]; then
+  echo "Error: --gpu_units_per_job and --memory_limit_mib require adaptive mode." >&2
+  exit 2
+fi
 if [ "$WORKFLOW_ENABLED" -eq 1 ] && [ "$EXECUTION_MODE" != adaptive-shared-queue ]; then
   echo "Error: --after, --retry_lost_jobs and --early_eta_sample require adaptive mode." >&2
   exit 2
@@ -255,6 +271,13 @@ if [ "$EXECUTION_MODE" = "adaptive-shared-queue" ]; then
     }
   [[ "$SHARED_IO_UNITS_PER_JOB" =~ ^[0-9]+$ ]] && [[ "$MAX_WORKERS" =~ ^[0-9]+$ ]] || {
     echo "Error: adaptive shared-I/O units and max workers must be non-negative integers." >&2; exit 2;
+  }
+  [[ "$GPU_UNITS_PER_JOB" =~ ^[0-9]+$ ]] || {
+    echo "Error: --gpu_units_per_job must be a non-negative integer." >&2; exit 2;
+  }
+  [ -z "$MEMORY_LIMIT_MIB" ] || { [[ "$MEMORY_LIMIT_MIB" =~ ^[1-9][0-9]*$ ]] &&
+      [ "$MEMORY_LIMIT_MIB" -ge "$MEMORY_MIB_PER_JOB" ]; } || {
+    echo "Error: --memory_limit_mib must be an integer no smaller than --memory_mib_per_job." >&2; exit 2;
   }
   [[ "$ADAPTIVE_ADMISSION" = enabled || "$ADAPTIVE_ADMISSION" = paused ]] || {
     echo "Error: adaptive admission must be enabled or paused." >&2; exit 2;
@@ -706,7 +729,8 @@ if [ "$EXECUTION_MODE" = "adaptive-shared-queue" ]; then
   fi
   if ! python3 "$ADAPTIVE_COORDINATOR_SCRIPT" profile-fits \
       --state-root "$(dirname "$ADAPTIVE_POOL_MARKER")" --pool-id "$POOL_ID" \
-      --cpu-units "$CPU_UNITS_PER_JOB" --memory-mib "$MEMORY_MIB_PER_JOB"; then
+      --cpu-units "$CPU_UNITS_PER_JOB" --memory-mib "$MEMORY_MIB_PER_JOB" \
+      --gpu-units "$GPU_UNITS_PER_JOB"; then
     echo "Error: this job profile does not fit any enabled adaptive host." >&2
     exit 2
   fi
@@ -987,6 +1011,9 @@ register_adaptive_queue() (
     echo "cpu_units_per_job=$CPU_UNITS_PER_JOB"
     echo "memory_mib_per_job=$MEMORY_MIB_PER_JOB"
     echo "shared_io_units_per_job=$SHARED_IO_UNITS_PER_JOB"
+    # Opt-in costs appear only when used, so other queues keep their original profile.
+    [ "$GPU_UNITS_PER_JOB" -eq 0 ] || echo "gpu_units_per_job=$GPU_UNITS_PER_JOB"
+    [ -z "$MEMORY_LIMIT_MIB" ] || echo "memory_limit_mib=$MEMORY_LIMIT_MIB"
     if [ "$WORKFLOW_ENABLED" -eq 1 ]; then
       echo "dependencies=$DEPENDENCIES"
       echo "retry_lost_jobs=$RETRY_LOST_JOBS"

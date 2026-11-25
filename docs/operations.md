@@ -170,3 +170,69 @@ queue starts a specified number of workers per host. Host-local shards reduce
 shared scheduler traffic for short jobs and use GNU Parallel on the workers.
 The deployed `start_workers.sh --help` describes both fixed modes. Hosts in a
 mixed-architecture pool must have compatible job executables and dependencies.
+
+## Opt-in host and queue features
+
+These change nothing unless the inventory or a submission sets them. Inventory
+settings take effect at the next pool start (drain, render, deploy, start).
+
+**Owner activity.** For a machine someone also uses at the keyboard:
+
+```json
+{"id": "desk", "ssh": "user@desk", "cpu_units": 8, "memory_mib": 12288,
+ "enabled": true, "owner_idle_seconds": 300, "owner_active": "suspend"}
+```
+
+Each resource sample, the agent reads how long the console has been idle: macOS
+`HIDIdleTime`, or the Linux graphical session's logind idle hint. While the
+owner has been idle for less than `owner_idle_seconds` (60–86400), the host starts
+no new jobs, as if it were away. Running jobs continue and stay charged. If the
+idle time cannot be read, including a failed logind query, the host also starts
+nothing (`owner_unknown`).
+Linux desktops set the idle hint only after their own idle delay, which therefore
+acts as a floor on `owner_idle_seconds`.
+
+`owner_active: "suspend"` also stops every process of the host's running jobs
+(SIGSTOP) while the owner is active, and continues them (SIGCONT) once the owner
+has been idle long enough. The agent records the jobs it is about to stop before
+stopping them, so an agent that exits, crashes or restarts resumes them first. Suspended jobs still hold their memory, their wall time keeps
+counting (so queue ETAs and backfill estimates see longer jobs), and a pool drain
+waits for them. The default `"hold"` never stops a running job.
+
+**Devices (GPUs).** Give a host `"gpu_units": 2` and submit with
+`--gpu_units_per_job 1`. Device units are a fourth resource next to CPU, memory and
+shared I/O: a queue runs only where enough are free, and a large request reserves
+a drain host like a large CPU or memory request. The agent assigns specific
+indices (0, 1, …) and exports them to the job as `CUDA_VISIBLE_DEVICES` and
+`PW_GPU_DEVICES`. The scheduler does not measure GPU use by other programs. A
+Mac's GPU cannot be divided, so `gpu_units: 1` there just runs one GPU job at a
+time.
+
+**Memory limit.** `--memory_limit_mib N` (at least `--memory_mib_per_job`) ends a
+job whose process tree uses more than N MiB at a resource sample: SIGTERM first,
+then SIGKILL at each later sample while it still runs, even if its memory has
+dropped. The job counts as failed even if it exits 0, so it writes no done marker
+and unlocks no dependent stage, and repeated fast failures still place a failure
+hold. Processes it leaves behind in its session are killed, and the job log ends
+with the reason. Sampling is every few seconds, so a fast spike can pass between
+samples. Declared memory remains the admission floor, and `set-memory` refuses a
+floor above the limit.
+
+**Backfill.** With `"backfill": true` at the top level of the inventory, capacity
+held back for a large job (a drain reservation) may run a shorter job when that
+job's 90th-percentile runtime, plus 30 s, ends before the large job could fit. The
+coordinator measures runtimes from claim and done times of each queue's last 30
+completed jobs, and needs at least 5. It forecasts when the large job fits from
+the 10th-percentile runtimes of the jobs that must finish first. A job without an
+estimate may end at any moment, so it makes the forecast earlier and allows less
+backfill. A backfilled job that runs past its 90th percentile delays the large
+job, which is why backfill is opt-in. `pool-start --backfill 0|1` overrides the
+rendered default.
+
+**CPU time of finished jobs** is always recorded. Each finished job writes
+`usage/job_<ID>.env` in its batch: user and system CPU seconds of its process
+tree, wall seconds and exit code. The job log ends with a `CPU:` line. Adaptive
+queue status reports `cpu_seconds_succeeded`, `cpu_seconds_failed` and
+`jobs_with_usage`. The dashboard snapshot (`cluster-status.json`) reports them
+as CPU-hours in each queue row's `usage`. A finished queue keeps its final totals
+there for a week, from the coordinator's `retired/` index.

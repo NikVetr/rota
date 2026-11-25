@@ -27,6 +27,60 @@ env_value() {
   ' "$file"
 }
 
+# Absent keys take the default; duplicates still fail.
+optional_env_value() {
+  awk -v key="$2" -v fallback="$3" '
+    index($0, key "=") == 1 {count++; value=substr($0, length(key) + 2)}
+    END {if (count > 1) exit 1; print (count ? value : fallback)}
+  ' "$1"
+}
+
+# A set of PIDs and all their descendants, from one process listing.
+tree_pids() {
+  [ "$#" -gt 0 ] || return 0
+  ps -axo pid=,ppid= 2>/dev/null | awk -v roots="$*" '
+    BEGIN {count = split(roots, root, " "); for (i = 1; i <= count; i++) keep[root[i]] = 1}
+    {parent[$1] = $2; pids[++n] = $1}
+    END {
+      for (changed = 1; changed;) {
+        changed = 0
+        for (i = 1; i <= n; i++)
+          if (!(pids[i] in keep) && (parent[pids[i]] in keep)) {keep[pids[i]] = 1; changed = 1}
+      }
+      for (pid in keep) if (pid in parent) print pid
+    }
+  '
+}
+
+# Seconds since the console user last used the keyboard or mouse. macOS reports HIDIdleTime;
+# Linux reports the graphical session's idle hint (set by the desktop's own idle timer).
+console_idle_seconds() {
+  local value session hint since
+  if command -v ioreg >/dev/null 2>&1; then
+    value="$(ioreg -c IOHIDSystem 2>/dev/null | awk '/"HIDIdleTime" = / {print int($NF / 1000000000); exit}')"
+    is_uint "$value" || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+  command -v loginctl >/dev/null 2>&1 || return 1
+  # A failed query is unreadable activity; only a successful one without a session is an empty console.
+  value="$(loginctl show-seat seat0 -p ActiveSession 2>/dev/null)" || return 1
+  session="$(awk -F= '$1 == "ActiveSession" {print $2}' <<< "$value")"
+  if [ -z "$session" ]; then
+    printf '%s\n' 999999  # nobody is at the console
+    return 0
+  fi
+  value="$(loginctl show-session "$session" -p IdleHint -p IdleSinceHint 2>/dev/null)" || return 1
+  hint="$(awk -F= '$1 == "IdleHint" {print $2}' <<< "$value")"
+  since="$(awk -F= '$1 == "IdleSinceHint" {print $2}' <<< "$value")"
+  case "$hint" in
+    no) printf '%s\n' 0 ;;
+    yes) is_uint "$since" && [ "$since" -gt 0 ] || return 1
+      awk -v now="$(date +%s)" -v since="$since" 'BEGIN {v = int(now - since / 1000000); print (v < 0 ? 0 : v)}' ;;
+    *) return 1 ;;
+  esac
+}
+
 hash_file() {
   local output
   output="$(shasum -a 256 "$1")" || return 1
@@ -144,13 +198,13 @@ apply_failure_resets() {
 valid_allocations() {
   awk -F '\t' '
     BEGIN {
-      header="queue_id\ttarget_running\tstart_grants\tcpu_units_per_job\tmemory_mib_per_job\tshared_io_units_per_job\toriginal_queue_file\teditable_queue_file\tmodel_dir\tlog_dir\tlock_dir\ttag_clean\tqueue_sha256"
+      header="queue_id\ttarget_running\tstart_grants\tcpu_units_per_job\tmemory_mib_per_job\tshared_io_units_per_job\toriginal_queue_file\teditable_queue_file\tmodel_dir\tlog_dir\tlock_dir\ttag_clean\tqueue_sha256\tgpu_units_per_job\tmemory_limit_mib"
     }
     NR == 1 {if ($0 != header) exit 1; next}
-    NF != 13 || $1 !~ /^[A-Za-z0-9._-]+$/ || seen[$1]++ {exit 1}
+    NF != 15 || $1 !~ /^[A-Za-z0-9._-]+$/ || seen[$1]++ {exit 1}
     $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ || $3 > $2 || $4 !~ /^[1-9][0-9]*$/ ||
       $5 !~ /^[1-9][0-9]*$/ || $6 !~ /^[0-9]+$/ ||
-      length($13) != 64 || $13 ~ /[^0-9a-f]/ {exit 1}
+      length($13) != 64 || $13 ~ /[^0-9a-f]/ || $14 !~ /^[0-9]+$/ || $15 !~ /^[0-9]+$/ {exit 1}
     {for (i=7; i<=12; i++) if ($i == "") exit 1}
     END {if (NR == 0) exit 1}
   ' "$1"
@@ -371,7 +425,7 @@ reconcile_reservations() {
       --history-file "$state_dir/memory-history.json" --pool-id "$pool_id" --host-id "$host_id" \
       --max-gap-seconds "$((sample_seconds * 3 + 15))" || die "cannot retain memory measurement for $id"
     record_outcome "$queue_id" "$id" "$outcome" "$file"
-    rm -f "$file" "$result"
+    rm -f "$file" "$result" "${file%.env}.options" "${file%.env}.jobpid" "${file%.env}.limit-kill"
     case "$outcome" in
       infrastructure_failed|host_rebooted) ;;
       *) rm -f "$worker_output_dir/${id}.log" ;;
@@ -719,6 +773,7 @@ sample_live_resources() {
   [ "$live_memory_mib" -le "$memory_budget" ] || live_memory_mib="$memory_budget"
   telemetry_state=ok
   resource_sample_epoch="$(date +%s)"
+  apply_host_policies
 }
 
 file_signature() {
@@ -784,21 +839,126 @@ next_reservation_id() {
   next_id="$pool_id.$host_id.$reservation_counter"
 }
 
+# Live reservations as "<reservation ID><TAB><worker PID>" lines. Each PID is checked against its
+# reservation ID, so a PID the system has reused for another process is never signaled.
+live_reservations() {
+  local id queue state pid extra
+  [ -f "$usage_file" ] || return 0
+  while IFS=$'\t' read -r id queue state pid extra; do
+    is_positive_int "$pid" && inspect_process "$pid" "$id" && printf '%s\t%s\n' "$id" "$pid"
+  done < "$usage_file"
+}
+
+signal_trees() {
+  local signal="$1" pids
+  shift
+  pids="$(tree_pids "$@")"
+  [ -z "$pids" ] || kill "-$signal" $pids 2>/dev/null || true
+}
+
+# Resume the reservations the suspension record names and every live one. The record outlives a
+# crash, so each of its PIDs is checked against its reservation ID again before it is signaled.
+resume_suspended() {
+  local id pid roots=""
+  [ -f "$suspended_file" ] || return 0
+  while IFS=$'\t' read -r id pid; do
+    is_positive_int "$pid" && inspect_process "$pid" "$id" && roots="$roots $pid"
+  done < "$suspended_file"
+  signal_trees CONT $roots $(live_reservations | cut -f2)
+  rm -f "$suspended_file"
+}
+
+# Opt-in host policies, applied after each resource sample.
+apply_host_policies() {
+  local id queue state pid cpu memory observed charged current sustained extra limit job note roots
+  owner_state=off
+  owner_idle=""
+  if [ "$owner_idle_threshold" -gt 0 ]; then
+    if owner_idle="$(console_idle_seconds)"; then
+      if [ "$owner_idle" -lt "$owner_idle_threshold" ]; then owner_state=active; else owner_state=idle; fi
+    else
+      owner_idle=-1
+      owner_state=unknown  # starts nothing until activity can be read
+    fi
+  fi
+  if [ "$owner_action" = suspend ] && [ "$owner_state" = active ]; then
+    roots="$(live_reservations)"
+    if [ -n "$roots" ]; then
+      # Record what is about to stop before stopping it, so a crash cannot strand a job; keep
+      # earlier entries, which resume checks again. Repeated each sample: a process forked just
+      # before the stop is caught next time.
+      if atomic_write "$suspended_file" "$({ [ ! -f "$suspended_file" ] || cat "$suspended_file"
+          printf '%s\n' "$roots"; } | awk 'NF && !seen[$0]++')"; then
+        signal_trees STOP $(cut -f2 <<< "$roots")
+        owner_state=suspended
+      else
+        echo "mmadaptiveagent: cannot record suspended reservations on $host_id; leaving them running" >&2
+      fi
+    fi
+  elif [ "$owner_state" = idle ] || [ "$owner_state" = off ]; then
+    resume_suspended
+  elif [ -f "$suspended_file" ]; then
+    owner_state=suspended
+  fi
+  # Memory limits: end only the job's own process tree, so its worker records the failure.
+  while IFS=$'\t' read -r id queue state pid cpu memory observed charged current sustained extra; do
+    [ -f "$reservations_dir/$id.options" ] && [ -f "$reservations_dir/$id.jobpid" ] || continue
+    limit="$(optional_env_value "$reservations_dir/$id.options" memory_limit_mib 0)" || continue
+    is_positive_int "$limit" || continue
+    note="$reservations_dir/$id.limit-kill"
+    # After the first breach a surviving job is killed, even once its memory has fallen.
+    [ -f "$note" ] || { is_uint "$current" && [ "$current" -gt "$limit" ]; } || continue
+    job="$(cat "$reservations_dir/$id.jobpid")"
+    # The job must still belong to this reservation's live worker.
+    is_positive_int "$job" && is_positive_int "$pid" && inspect_process "$pid" "$id" &&
+      tree_pids "$pid" | grep -qx "$job" || continue
+    if [ -f "$note" ]; then
+      signal_trees KILL "$job"
+    else
+      printf 'Ended by the scheduler: the job used %s MiB, over its memory limit of %s MiB.\n' \
+        "$current" "$limit" > "$note"
+      echo "mmadaptiveagent: ending reservation $id on $host_id: $current MiB exceeds its $limit MiB limit" >&2
+      signal_trees TERM "$job"
+    fi
+  done < "$usage_file"
+}
+
+# Device indices held by live reservations, one per line.
+devices_in_use() {
+  local file
+  for file in "$reservations_dir"/*.options; do
+    [ -f "$file" ] && [ -f "${file%.options}.env" ] || continue
+    optional_env_value "$file" gpu_devices "" | tr ',' '\n'
+  done | awk 'NF'
+}
+
 launch_one() {
   local queue_id="$1" cpu="$2" memory="$3" io="$4" original="$5" editable="$6"
-  local model="$7" log="$8" lock="$9" tag="${10}" queue_hash="${11}" id reservation result output pid
+  local model="$7" log="$8" lock="$9" tag="${10}" queue_hash="${11}" gpu="${12:-0}" limit="${13:-0}"
+  local id reservation result output pid devices=""
   next_reservation_id
   id="$next_id"
   reservation="$reservations_dir/${id}.env"
   result="$results_dir/${id}.env"
   output="$worker_output_dir/${id}.log"
+  if [ "$gpu" -gt 0 ]; then
+    # The lowest free indices; the caller has already checked the device budget.
+    devices="$(devices_in_use | awk -v budget="$gpu_budget" -v want="$gpu" '
+      {used[$1] = 1}
+      END {for (i = 0; i < budget && n < want; i++) if (!(i in used)) {list = list (n++ ? "," : "") i}
+           if (n < want) exit 1; print list}')" || die "no free devices for reservation $id"
+  fi
+  if [ "$gpu" -gt 0 ] || [ "$limit" -gt 0 ]; then
+    atomic_write "$reservations_dir/${id}.options" "gpu_devices=$devices" "memory_limit_mib=$limit" ||
+      die "cannot record options for reservation $id"
+  fi
   write_reservation "$reservation" "$id" "$queue_id" "$accepted_generation" \
     "$cpu" "$memory" "$io" "" starting || die "cannot create reservation $id"
   if command -v setsid >/dev/null 2>&1; then
-    setsid bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
+    PW_GPU_DEVICES="$devices" setsid bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
       "$id" "$result" "$reservation" "$queue_hash" </dev/null >"$output" 2>&1 &
   else
-    perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed\n"; exec @ARGV' \
+    PW_GPU_DEVICES="$devices" perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed\n"; exec @ARGV' \
       bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
       "$id" "$result" "$reservation" "$queue_hash" </dev/null >"$output" 2>&1 &
   fi
@@ -812,7 +972,10 @@ launch_one() {
 
 enforce_plan() {
   local queue target grants cpu memory io original editable model log lock tag queue_hash
-  local queue_running grants_started extra totals
+  local gpu limit queue_running grants_started extra totals used_gpu
+  # The owner is at this host (or its activity is unknown): start nothing new.
+  case "$owner_state" in active|unknown|suspended) return 0 ;; esac
+  used_gpu="$(devices_in_use | awk 'END {print NR}')"
   totals="$(awk -F '\t' '{cpu += $5; memory += $8} END {print cpu+0, memory+0}' "$usage_file")"
   used_cpu="${totals%% *}"
   used_memory="${totals#* }"
@@ -829,7 +992,7 @@ enforce_plan() {
     FNR > 1 {print $0 FS (running[$1] + 0)}
   ' "$accepted_allocations" > "$plan_rows_file" || die "cannot account accepted start grants"
   while IFS=$'\t' read -r queue target grants cpu memory io original editable model log lock tag queue_hash \
-      queue_running extra; do
+      gpu limit queue_running extra; do
     [ -n "$queue" ] || continue
     [ ! -e "$empty_dir/${accepted_generation}.${queue}" ] || continue
     failure_record "$queue"
@@ -838,8 +1001,11 @@ enforce_plan() {
     while [ "$grants_started" -lt "$grants" ] && [ "$queue_running" -lt "$target" ] &&
           [ "$stop_agent" -eq 0 ] && [ "$SECONDS" -lt "$lease_deadline" ] &&
           [ $((used_cpu + cpu)) -le "$live_cpu_units" ] &&
-          [ $((used_memory + memory)) -le "$live_memory_mib" ]; do
-      launch_one "$queue" "$cpu" "$memory" "$io" "$original" "$editable" "$model" "$log" "$lock" "$tag" "$queue_hash"
+          [ $((used_memory + memory)) -le "$live_memory_mib" ] &&
+          [ $((used_gpu + gpu)) -le "$gpu_budget" ]; do
+      launch_one "$queue" "$cpu" "$memory" "$io" "$original" "$editable" "$model" "$log" "$lock" "$tag" \
+        "$queue_hash" "$gpu" "$limit"
+      used_gpu=$((used_gpu + gpu))
       used_cpu=$((used_cpu + cpu))
       used_memory=$((used_memory + memory))
       queue_running=$((queue_running + 1))
@@ -852,14 +1018,14 @@ publish_status() {
   local admission="$1" temporary id queue state pid cpu memory observed charged current sustained extra
   local file calibration_report
   temporary="${status_file}.tmp.$$.$RANDOM"
-  printf 'record_type\tpool_id\thost_id\tgeneration\tadmission\treservation_id\tqueue_id\tstate\tpid\tcpu_units\tmemory_mib\tobserved_memory_mib\tcharged_memory_mib\tmessage\tlive_cpu_units\tlive_memory_mib\tsmbd_cpu_tenths\ttelemetry_state\tresource_sample_epoch\tsmb_bytes\tcurrent_memory_mib\tsustained_memory_mib\n' > "$temporary" || return 1
-  printf 'agent\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\n' \
+  printf 'record_type\tpool_id\thost_id\tgeneration\tadmission\treservation_id\tqueue_id\tstate\tpid\tcpu_units\tmemory_mib\tobserved_memory_mib\tcharged_memory_mib\tmessage\tlive_cpu_units\tlive_memory_mib\tsmbd_cpu_tenths\ttelemetry_state\tresource_sample_epoch\tsmb_bytes\tcurrent_memory_mib\tsustained_memory_mib\towner_state\towner_idle_seconds\n' > "$temporary" || return 1
+  printf 'agent\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t%s\t%s\n' \
     "$pool_id" "$host_id" "$accepted_generation" "$admission" "$plan_message" \
     "$live_cpu_units" "$live_memory_mib" "$smbd_cpu_tenths" "$telemetry_state" "$resource_sample_epoch" \
-    "$smb_bytes" >> "$temporary" || return 1
+    "$smb_bytes" "$owner_state" "${owner_idle:--1}" >> "$temporary" || return 1
   while IFS=$'\t' read -r id queue state pid cpu memory observed charged current sustained extra; do
     [ -n "$id" ] || continue
-    printf 'reservation\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t%s\t%s\n' \
+    printf 'reservation\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t%s\t%s\t\t\n' \
       "$pool_id" "$host_id" "$accepted_generation" "$admission" "$id" "$queue" \
       "$state" "$pid" "$cpu" "$memory" "$observed" "$charged" "$current" "$sustained" >> "$temporary" || return 1
   done < "$usage_file"
@@ -871,9 +1037,9 @@ publish_status() {
       awk -F '\t' -v OFS='\t' \
         -v pool="$pool_id" -v host="$host_id" '
         NF != 2 {exit 1}
-        {for (i=1; i<=22; i++) value[i]="";
+        {for (i=1; i<=24; i++) value[i]="";
          value[1]="calibration"; value[2]=pool; value[3]=host; value[7]=$1; value[14]=$2;
-         for (i=1; i<=22; i++) printf "%s%s", value[i], (i==22 ? "\n" : OFS)}
+         for (i=1; i<=24; i++) printf "%s%s", value[i], (i==24 ? "\n" : OFS)}
       ' <<< "$calibration_report" >> "$temporary" || return 1
     fi
   fi
@@ -882,7 +1048,7 @@ publish_status() {
     queue="${file##*/}"; queue="${queue%.env}"
     failure_record "$queue"
     [ "$failure_reason" != none ] || continue
-    printf 'blocked_queue\t%s\t%s\t\t\t\t%s\t\t\t\t\t\t\t%s\t\t\t\t\t\t\t\t\n' \
+    printf 'blocked_queue\t%s\t%s\t\t\t\t%s\t\t\t\t\t\t\t%s\t\t\t\t\t\t\t\t\t\t\n' \
       "$pool_id" "$host_id" "$queue" "$failure_reason" >> "$temporary" || return 1
   done
   mv -f "$temporary" "$status_file"
@@ -913,6 +1079,12 @@ pool_id="$(env_value "$agent_file" pool_id)" || die "missing pool_id"
 host_id="$(env_value "$agent_file" host_id)" || die "missing host_id"
 cpu_budget="$(env_value "$agent_file" cpu_units)" || die "missing cpu_units"
 memory_budget="$(env_value "$agent_file" memory_mib)" || die "missing memory_mib"
+# Opt-in host settings; absent keys keep today's behavior.
+gpu_budget="$(optional_env_value "$agent_file" gpu_units 0)" || die "duplicate gpu_units"
+owner_idle_threshold="$(optional_env_value "$agent_file" owner_idle_seconds 0)" || die "duplicate owner_idle_seconds"
+owner_action="$(optional_env_value "$agent_file" owner_active hold)" || die "duplicate owner_active"
+is_uint "$gpu_budget" && is_uint "$owner_idle_threshold" || die "invalid host options"
+case "$owner_action" in hold|suspend) ;; *) die "invalid owner_active: $owner_action" ;; esac
 cpu_tolerance_pct=10
 runner_path="$(env_value "$agent_file" runner_path)" || die "missing runner_path"
 runner_hash="$(env_value "$agent_file" runner_sha256)" || die "missing runner_sha256"
@@ -944,6 +1116,7 @@ counter_file="$state_dir/reservation_counter.env"
 status_file="$state_dir/status.tsv"
 usage_file="$state_dir/reservation_usage.tsv"
 plan_rows_file="$state_dir/plan_rows.tsv"
+suspended_file="$state_dir/suspended.tsv"
 if [ ! -f "$generation_file" ]; then
   [ ! -e "$state_dir/lease.env" ] && [ ! -e "$state_dir/accepted.allocations.tsv" ] ||
     die "saved generation is missing while accepted plan state exists"
@@ -999,7 +1172,7 @@ stop_agent=0
 trap 'stop_agent=1' TERM INT
 telemetry_snapshot=""
 telemetry_original_snapshot=""
-trap 'lock_pid="$(env_value "$agent_lock" pid 2>/dev/null || true)"; [ "$lock_pid" != "$$" ] || rm -f "$agent_lock"; [ -z "$telemetry_snapshot" ] || rm -f "$telemetry_snapshot"; [ -z "$telemetry_original_snapshot" ] || rm -f "$telemetry_original_snapshot"' EXIT
+trap 'resume_suspended; lock_pid="$(env_value "$agent_lock" pid 2>/dev/null || true)"; [ "$lock_pid" != "$$" ] || rm -f "$agent_lock"; [ -z "$telemetry_snapshot" ] || rm -f "$telemetry_snapshot"; [ -z "$telemetry_original_snapshot" ] || rm -f "$telemetry_original_snapshot"' EXIT
 
 SECONDS=0
 accepted_generation=0
@@ -1016,6 +1189,10 @@ smb_bytes=-1
 telemetry_state=unavailable
 resource_sample_epoch=0
 next_telemetry_sample=0
+owner_state=off
+owner_idle=""
+# A previous agent may have stopped with jobs suspended for the owner.
+resume_suspended
 while [ "$stop_agent" -eq 0 ]; do
   accept_plan
   apply_failure_resets
