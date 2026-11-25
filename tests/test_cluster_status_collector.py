@@ -274,7 +274,9 @@ class CollectorTests(unittest.TestCase):
             (base / "rows.tsv").write_text(TSV)
             hosts = base / "hosts.txt"
             hosts.write_text("u@127.0.0.1 4 here\nu@192.0.2.7 4 far\nu@192.0.2.8 6 storage\n")
+            # XDG_CONFIG_HOME: an installed collector's settings on this machine must not leak in.
             env = dict(os.environ, PATH=f"{binary}{os.pathsep}{os.environ['PATH']}", XDG_STATE_HOME=str(base / "xdg"),
+                       XDG_CONFIG_HOME=str(base / "config"),
                        FAKE_SSH_LOG=str(base / "ssh.log"), FAKE_COLLECT_LOG=str(base / "collect.log"),
                        FAKE_TSV=str(base / "rows.tsv"), FAKE_SAMPLE=json.dumps(SAMPLE), FAKE_IO=json.dumps(IO),
                        FAKE_SCHEDULER=json.dumps(SCHEDULER))
