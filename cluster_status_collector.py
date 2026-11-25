@@ -19,6 +19,7 @@ import re
 import shlex
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,7 @@ import threading
 import time
 
 from failure_events import FailureEvents
+import queue_eta_history
 
 SCHEMA = 1
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -501,6 +503,10 @@ class Collector:
                                        for line in output.splitlines()) + "\n"
                     atomic_write(Path(str(self.args.queue_snapshot) + ".details"), output)
                     atomic_write(self.args.queue_snapshot, legacy)
+                    try:
+                        queue_eta_history.record(self.args.queue_snapshot.parent / "queue-eta.sqlite3", queues)
+                    except (OSError, sqlite3.Error) as failure:
+                        log(f"could not record queue ETA history: {failure}")
         with self.lock:
             if error:
                 if self.queue_refresh["ok"] is not False:

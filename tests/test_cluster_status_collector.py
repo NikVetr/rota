@@ -258,7 +258,7 @@ class CollectorTests(unittest.TestCase):
             scripts, binary, state = base / "scripts", base / "bin", base / "state"
             scripts.mkdir()
             binary.mkdir()
-            for name in ("cluster_status_collector.py", "cluster_config.py", "failure_events.py", "monitor_sample.py", "monitor_cpu.py",
+            for name in ("cluster_status_collector.py", "cluster_config.py", "failure_events.py", "queue_eta_history.py", "monitor_sample.py", "monitor_cpu.py",
                          "monitor_mac.py", "monitor_linux.py"):
                 shutil.copy(ROOT / name, scripts / name)
             (scripts / "monitor_queue_progress.sh").touch()
@@ -286,10 +286,10 @@ class CollectorTests(unittest.TestCase):
             leftover = subprocess.run(["pgrep", "-f", str(binary / "ssh")], capture_output=True, text=True)
             self.assertEqual(leftover.stdout, "", "a stream outlived the collector")
             self.assertFalse((base / "xdg").exists(), "explicit output paths were ignored")
-            for name in ("cluster-status.json", "queues.tsv", "queues.tsv.details", "hosts.txt", "events.jsonl.state.json"):
+            for name in ("cluster-status.json", "queues.tsv", "queues.tsv.details", "hosts.txt", "events.jsonl.state.json", "queue-eta.sqlite3"):
                 self.assertEqual(stat.S_IMODE((state / name).stat().st_mode), 0o600, name)
             self.assertEqual(sorted(path.name for path in state.iterdir()),
-                             ["cluster-status.json", "events.jsonl.state.json", "hosts.txt", "queues.tsv", "queues.tsv.details"],
+                             ["cluster-status.json", "events.jsonl.state.json", "hosts.txt", "queue-eta.sqlite3", "queues.tsv", "queues.tsv.details"],
                              "a temporary file was left behind")
             self.assertEqual((state / "queues.tsv").read_text(), TSV)
             snapshot = json.loads((state / "cluster-status.json").read_text())

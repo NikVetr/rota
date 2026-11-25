@@ -117,6 +117,14 @@ An untimed queue can occupy capacity, and a queue with insufficient timing or
 no projected finish shows a blank ETA. If the whole pool snapshot is
 unavailable, running rows fall back to the current-allocation estimate.
 
+The desktop collector saves the first displayed forecast it sees in each
+quarter of a queue's progress. To compare those forecasts with the recorded
+completion time, run `python3 queue_eta_history.py` on the collector host.
+Use `--queue <label-or-id>` to filter or `--json` for timestamps and errors in
+seconds. Positive errors mean a late finish. Open and unsuccessful queues have
+no scored error. The history includes worker counts and timing warnings from
+when each estimate was made, and survives collector restarts.
+
 The shared monitor snapshot carries the pool estimate by default. To compare
 both estimates in seconds on the coordinator, run:
 
