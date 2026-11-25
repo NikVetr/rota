@@ -137,7 +137,7 @@ class FailureEvents:
         keys = sorted(incident["jobs"]) + sorted(incident["holds"])
         ends = [outage["ended"] for outage in outages.values() if outage["ended"] is not None]
         return {
-            "id": "pw-" + hashlib.sha256("\n".join(keys).encode()).hexdigest()[:20],
+            "id": "rota-" + hashlib.sha256("\n".join(keys).encode()).hexdigest()[:20],
             "at": round(now, 3), "kind": "job_failures" if entries else "hold",
             "queue_id": queue["queue_id"], "queue_tag": queue["tag"], "batch_dir": queue["batch_dir"],
             "project": queue["project"], "run_name": queue["run_name"], "conversation": queue["submitted_by"],

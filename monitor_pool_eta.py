@@ -274,8 +274,7 @@ def read_hosts(root, pool, ready, now, lease):
             continue
         if not rows or any(r["pool_id"] != pool["pool_id"] or r["host_id"] != name for r in rows):
             continue
-        # "agent": the daemon row's record type in pools started before its rename.
-        daemon = next((r for r in rows if r["record_type"] in ("daemon", "agent")), None)
+        daemon = next((r for r in rows if r["record_type"] == "daemon"), None)
         if daemon is None:
             continue
         for r in rows:
@@ -384,7 +383,7 @@ def main():
     parser.add_argument("--allocation-only", action="store_true", help="skip the pool simulation")
     parser.add_argument("--with-warnings", action="store_true", help="append the timing warning to tab-separated rows")
     args = parser.parse_args()
-    root = args.state_root or args.root / ".parallel-workers/adaptive"
+    root = args.state_root or args.root / ".rota/adaptive"
     try:
         sys.path.insert(0, str(args.root.resolve()))
         from adaptive_coordinator import allocate  # type: ignore[reportMissingImports]

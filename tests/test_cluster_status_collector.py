@@ -81,7 +81,7 @@ class HostsTests(unittest.TestCase):
             runtime.mkdir()
             with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
                 target = collector.runtime_snapshot(state)
-                self.assertEqual(target, runtime / "parallel-workers" / "cluster-status.json")
+                self.assertEqual(target, runtime / "rota" / "cluster-status.json")
                 collector.atomic_write(target, "{}\n")
                 link = state / "cluster-status.json"
                 self.assertTrue(link.is_symlink())
@@ -116,7 +116,7 @@ class HostsTests(unittest.TestCase):
         self.assertEqual(command[-2], "u@192.0.2.1")
         remote = shlex.split(command[-1])
         self.assertEqual(remote[:3], ["exec", "/bin/bash", "-lc"])
-        self.assertIn('exec python3 "$HOME/parallel-workers-monitor/monitor_sample.py" stream --root \'/a b\'',
+        self.assertIn('exec python3 "$HOME/rota-monitor/monitor_sample.py" stream --root \'/a b\'',
                       remote[3])
 
     def test_hosts_file_falls_back_to_cache_and_never_blocks(self):
@@ -277,7 +277,7 @@ class CollectorTests(unittest.TestCase):
                        FAKE_SSH_LOG=str(base / "ssh.log"), FAKE_COLLECT_LOG=str(base / "collect.log"),
                        FAKE_TSV=str(base / "rows.tsv"), FAKE_SAMPLE=json.dumps(SAMPLE), FAKE_IO=json.dumps(IO),
                        FAKE_SCHEDULER=json.dumps(SCHEDULER))
-            env.pop("PARALLEL_WORKERS_COORDINATOR", None)
+            env.pop("ROTA_COORDINATOR", None)
             result = subprocess.run(
                 [sys.executable, str(scripts / "cluster_status_collector.py"), "--root", "/nonexistent/share",
                  "--coordinator", "u@192.0.2.8", "--hosts_file", str(hosts), "--hosts_cache", str(state / "hosts.txt"),
@@ -383,25 +383,25 @@ class InstallTests(unittest.TestCase):
             fake.chmod(0o755)
             generated = base / "rendered"
             generated.mkdir()
-            settings = {"PARALLEL_WORKERS_COORDINATOR": "user@storage", "PARALLEL_WORKERS_ROOT": "/srv/sample"}
+            settings = {"ROTA_COORDINATOR": "user@storage", "ROTA_ROOT": "/srv/sample"}
             (generated / "monitor-environment.json").write_text(json.dumps(settings))
             env = dict(os.environ, SYSTEMCTL=str(fake), XDG_CONFIG_HOME=str(base / "config"),
                        FAKE_SYSTEMCTL_LOG=str(base / "calls"), HOME=str(base / "home"),
-                       PARALLEL_WORKERS_CONFIG_DIR=str(generated))
+                       ROTA_CONFIG_DIR=str(generated))
             script = str(ROOT / "admin" / "install_cluster_status_collector.sh")
             printed = subprocess.run(["bash", script, "--print"], env=env, capture_output=True, text=True)
             self.assertEqual(printed.returncode, 0, printed.stderr)
             self.assertFalse((base / "calls").exists(), "--print touched systemd")
             installed = subprocess.run(["bash", script], env=env, capture_output=True, text=True)
             self.assertEqual(installed.returncode, 0, installed.stderr)
-            local_settings = base / "config/parallel-workers/monitor-environment.json"
+            local_settings = base / "config/rota/monitor-environment.json"
             self.assertEqual(json.loads(local_settings.read_text()), settings)
-            unit = (base / "config" / "systemd" / "user" / "parallel-workers-collector.service").read_text()
+            unit = (base / "config" / "systemd" / "user" / "rota-collector.service").read_text()
             calls = (base / "calls").read_text().splitlines()
-            link = base / "home/.local/bin/pw-control"
-            self.assertEqual(os.readlink(link), str(ROOT / "pw_control.py"))
+            link = base / "home/.local/bin/rota"
+            self.assertEqual(os.readlink(link), str(ROOT / "rota"))
             removed = subprocess.run(["bash", script, "--uninstall"], env=env, capture_output=True, text=True)
-            self.assertFalse(link.is_symlink(), "uninstall left pw-control behind")
+            self.assertFalse(link.is_symlink(), "uninstall left the rota command behind")
             self.assertEqual(removed.returncode, 0, removed.stderr)
             self.assertFalse(local_settings.exists())
             remaining = list((base / "config" / "systemd" / "user").iterdir())
@@ -411,9 +411,9 @@ class InstallTests(unittest.TestCase):
         self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT}/cluster_status_collector.py\n", unit)
         for setting in ("Restart=always", "Nice=10", "CPUQuota=20%", "MemoryMax=256M", "WantedBy=default.target"):
             self.assertIn(setting + "\n", unit)
-        self.assertEqual(calls, ["--user daemon-reload", "--user enable parallel-workers-collector.service",
-                                 "--user restart parallel-workers-collector.service"])
-        self.assertEqual(all_calls[3:], ["--user disable --now parallel-workers-collector.service",
+        self.assertEqual(calls, ["--user daemon-reload", "--user enable rota-collector.service",
+                                 "--user restart rota-collector.service"])
+        self.assertEqual(all_calls[3:], ["--user disable --now rota-collector.service",
                                          "--user daemon-reload"])
         self.assertEqual(remaining, [])
 

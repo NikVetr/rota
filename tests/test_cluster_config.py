@@ -32,7 +32,7 @@ class ConfigTests(unittest.TestCase):
         data = self.load(self.data)
         env_file = config.render(data, self.root / "generated files")
         self.assertEqual(config.render(data, self.root / "generated files"), env_file)
-        result = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "$PARALLEL_WORKERS_ROOT" "$ADAPTIVE_SHARED_IO_CAPACITY"',
+        result = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "$ROTA_ROOT" "$ADAPTIVE_SHARED_IO_CAPACITY"',
                                  "test", str(env_file)], capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.splitlines(), [data["shared_root"], "0"])
         self.assertIn("user@worker 0 worker", (env_file.parent / "hosts.txt").read_text())
@@ -90,7 +90,7 @@ class ConfigTests(unittest.TestCase):
         data = self.load(self.data)
         generated = config.render(data, self.root / "generated").parent
         self.assertEqual((generated / "ssh_config").read_text().splitlines()[1:], [
-            "Host worker", "  ProxyCommand ~/.ssh/parallel-workers-route.sh %h %p 198.51.100.2"])
+            "Host worker", "  ProxyCommand ~/.ssh/rota-route.sh %h %p 198.51.100.2"])
         self.assertEqual((generated / "adaptive-resources.tsv").read_text().splitlines()[2],
                          "worker\tuser@worker\t8\t16384\t1", "fallbacks do not change the resource table")
         for fallback in ("198.51.100.2 -oProxyCommand=x", "user@198.51.100.2", "", 7, "storage"):
@@ -105,13 +105,13 @@ class ConfigTests(unittest.TestCase):
 
     def test_installed_monitor_uses_inventory_without_login_shell(self):
         generated = config.render(self.load(self.data), self.root / "generated").parent
-        settings = self.root / "config" / "parallel-workers"
+        settings = self.root / "config" / "rota"
         settings.mkdir(parents=True)
         (settings / "monitor-environment.json").write_bytes((generated / "monitor-environment.json").read_bytes())
         result = subprocess.check_output(
             [sys.executable, "-c", 'import cluster_config as c, os; c.load_monitor_environment(); '
-             'print(os.environ["PARALLEL_WORKERS_ROOT"], os.environ["PARALLEL_WORKERS_COORDINATOR"])'],
-            cwd=ROOT, env={"XDG_CONFIG_HOME": str(settings.parent), "PARALLEL_WORKERS_ROOT": "/explicit"},
+             'print(os.environ["ROTA_ROOT"], os.environ["ROTA_COORDINATOR"])'],
+            cwd=ROOT, env={"XDG_CONFIG_HOME": str(settings.parent), "ROTA_ROOT": "/explicit"},
             text=True)
         self.assertEqual(result.strip(), "/explicit user@storage")
 
@@ -164,8 +164,8 @@ class ConfigTests(unittest.TestCase):
         block = source.split("  printf -v root_q", 1)[1].split("  io_cols=", 1)[0]
         block = "  printf -v root_q" + block
         setup = '''set -eu
-PARALLEL_WORKERS_ROOT="$1"
-PARALLEL_WORKERS_NETWORK_INTERFACE=eth0 PARALLEL_WORKERS_DISK=nvme0n1
+ROTA_ROOT="$1"
+ROTA_NETWORK_INTERFACE=eth0 ROTA_DISK=nvme0n1
 io_script_name=io.sh io_rates_name=rates.py CLUSTER_IO_REFRESH_SEC=3 storage_file=/tmp/unused.json
 MONITOR_INSTANCE=monitoring-1-2-3
 '''
@@ -176,7 +176,7 @@ MONITOR_INSTANCE=monitoring-1-2-3
         self.assertEqual(args[args.index("--interface")+1], "eth0")
         self.assertEqual(args[args.index("--disk")+1], "nvme0n1")
         # Concurrent dashboards must not share queue-rate state.
-        self.assertEqual(args[args.index("--rates_state_file")+1], "/tmp/parallel-workers-io-rates-monitoring-1-2-3.json")
+        self.assertEqual(args[args.index("--rates_state_file")+1], "/tmp/rota-io-rates-monitoring-1-2-3.json")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-}"
+export ROTA_ROOT="${ROTA_ROOT:-}"
 set -euo pipefail
 
-ROOT="${PARALLEL_WORKERS_ROOT}"
+ROOT="${ROTA_ROOT}"
 COLLECTOR_SCRIPT=""
 COLLECT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/monitor_queue_collect.sh"
 RENDERER_SCRIPT=""
@@ -138,7 +138,7 @@ set_title() {
 
 # Local readers such as a desktop status indicator get one stable, atomically
 # replaced copy instead of globbing this pane's private temporary files.
-SNAPSHOT_EXPORT="${PARALLEL_WORKERS_QUEUE_SNAPSHOT:-${XDG_STATE_HOME:-$HOME/.local/state}/parallel-workers/queue-progress.tsv}"
+SNAPSHOT_EXPORT="${ROTA_QUEUE_SNAPSHOT:-${XDG_STATE_HOME:-$HOME/.local/state}/rota/queue-progress.tsv}"
 publish_snapshot() {
   local export_dir export_tmp=""
   export_dir="$(dirname "$SNAPSHOT_EXPORT")"

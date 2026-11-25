@@ -42,8 +42,8 @@ Sys.setenv(
 )
 
 hostname <- Sys.info()[["nodename"]]
-shared_root <- Sys.getenv("PARALLEL_WORKERS_ROOT")
-if (!nzchar(shared_root)) stop("Source the inventory environment or export PARALLEL_WORKERS_ROOT for the job")
+shared_root <- Sys.getenv("ROTA_ROOT")
+if (!nzchar(shared_root)) stop("Source the inventory environment or export ROTA_ROOT for the job")
 project_dir <- file.path(shared_root, "stan_projects/test/benchmarks")
 results_dir <- file.path(project_dir, "results", run_id)
 tmp_dir <- file.path(project_dir, "tmp")
@@ -58,7 +58,7 @@ status_start_path <- file.path(status_dir, sprintf("job_%04d_%s.start.txt", job_
 status_end_path <- file.path(status_dir, sprintf("job_%04d_%s.end.txt", job_id, hostname))
 
 get_scripts_git_sha <- function() {
-  version_file <- file.path(shared_root, "PARALLEL_WORKERS_VERSION")
+  version_file <- file.path(shared_root, "ROTA_VERSION")
   if (!file.exists(version_file)) return(NA_character_)
   out <- readLines(version_file, n = 1L, warn = FALSE)
   if (length(out) == 0L || !grepl("^[0-9a-f]{40,64}$", out[[1]])) return(NA_character_)
@@ -223,7 +223,7 @@ run_stan_sv <- function() {
   data_list <- list(T = T, y = y)
 
   # Compile per-host locally
-  local_build_root <- path.expand("~/repos/cmdstan_models/parallel_workers_bench")
+  local_build_root <- path.expand("~/repos/cmdstan_models/rota_bench")
   build_dir <- file.path(local_build_root, paste0("sv_", hostname))
   lock_dir <- file.path(build_dir, ".compile_lock")
 

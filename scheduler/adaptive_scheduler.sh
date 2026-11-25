@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+export ROTA_ROOT="${ROTA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_ROOT="${ADAPTIVE_STATE_ROOT:-${PARALLEL_WORKERS_ROOT}/.parallel-workers/adaptive}"
+STATE_ROOT="${ADAPTIVE_STATE_ROOT:-${ROTA_ROOT}/.rota/adaptive}"
 POOL_FILE="${ADAPTIVE_POOL_MARKER:-$STATE_ROOT/pool.env}"
 TRANSITION_LOCK="${MODE_TRANSITION_LOCK:-$(dirname "$STATE_ROOT")/mode-transition.lock}"
-CLUSTER_HOSTS_FILE="${ADAPTIVE_CLUSTER_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
+CLUSTER_HOSTS_FILE="${ADAPTIVE_CLUSTER_HOSTS_FILE:-${ROTA_ROOT}/hosts/hosts-ethernet.txt}"
 START_WORKERS_SCRIPT="${START_WORKERS_SCRIPT:-$SCRIPT_DIR/start_workers.sh}"
 COORDINATOR_SCRIPT="${ADAPTIVE_COORDINATOR_SCRIPT:-$SCRIPT_DIR/adaptive_coordinator.py}"
 DAEMON_SCRIPT="${ADAPTIVE_DAEMON_SCRIPT:-$SCRIPT_DIR/mmhostdaemon.sh}"
@@ -319,7 +319,7 @@ ssh_no_input() {
 
 audit_host_adaptive_clear() {
   local target="$1" recover="$2" pattern audit remote_hostname snapshot output ancestor_pids
-  pattern='[.]parallel-workers/adaptive/[^ ]+/bin/[m]mworker[.]sh|[m]madaptivedaemon[.]sh|[a]daptive_coordinator[.]py|(^|[ /])[a]daptive_scheduler[.]sh([ ]|$)'
+  pattern='[.]rota/adaptive/[^ ]+/bin/[m]mworker[.]sh|[m]mhostdaemon[.]sh|[a]daptive_coordinator[.]py|(^|[ /])[a]daptive_scheduler[.]sh([ ]|$)'
   audit="$(ssh_no_input "$target" "hostname; ps -ww -axo pid=,command= | grep -E '$pattern' || true")" || \
     die "cannot audit scheduler processes on $target"
   remote_hostname="${audit%%$'\n'*}"
@@ -347,11 +347,10 @@ audit_host_adaptive_clear() {
   fi
   output="$(printf '%s\n' "$output" | awk '
     function base(path) {sub(/^.*\//, "", path); return path}
-    # mmadaptiveagent: the host daemon name in pools started before its rename.
     function scheduler(path, name) {
       name=base(path)
-      return name ~ /^(mmhostdaemon[.]sh|mmadaptiveagent[.]sh|adaptive_coordinator[.]py|adaptive_scheduler[.]sh)$/ ||
-        path ~ /[.]parallel-workers\/adaptive\/[^ \/]+\/bin\/mmworker[.]sh$/
+      return name ~ /^(mmhostdaemon[.]sh|adaptive_coordinator[.]py|adaptive_scheduler[.]sh)$/ ||
+        path ~ /[.]rota\/adaptive\/[^ \/]+\/bin\/mmworker[.]sh$/
     }
     $1 ~ /^[0-9]+$/ {
       script=2
@@ -359,7 +358,7 @@ audit_host_adaptive_clear() {
       if (!scheduler($script)) {
         shell=(executable ~ /^(bash|sh|zsh)$/)
         python=(executable ~ /^[Pp]ython([0-9]+([.][0-9]+)*)?$/)
-        if (!shell && !python && executable !~ /^(mmworker_|mmhostdaemon_|mmadaptiveagent_)/) next
+        if (!shell && !python && executable !~ /^(mmworker_|mmhostdaemon_)/) next
         script++
         while ($script ~ /^-/) {
           if ($script == "--") {script++; break}
@@ -391,7 +390,7 @@ stage_host() {
   local host_id="$1" target="$2" cpu="$3" memory="$4" archive="$5"
   local gpu="${6:-0}" owner_idle="${7:-0}" owner_active="${8:-hold}"
   "$SSH_BIN" -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 incoming=\"\$state_dir/bin.incoming.\$\$\"
 mkdir -p \"\$state_dir\" \"\$incoming\"
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))'
@@ -446,7 +445,7 @@ start_daemon() {
   [ "$sample_seconds" -ge 1 ] || sample_seconds=1
   [ "$sample_seconds" -le 5 ] || sample_seconds=5
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 owner=\"\$state_dir/daemon.lock\"
 if [ -f \"\$owner\" ]; then
   pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$owner\")
@@ -486,7 +485,7 @@ exit 7" >/dev/null || die "adaptive daemon failed readiness on $target"
 daemon_lock_state() {
   local target="$1"
   ssh_no_input "$target" "
-lock=\"\$HOME/.parallel-workers/adaptive/$POOL_ID/daemon.lock\"
+lock=\"\$HOME/.rota/adaptive/$POOL_ID/daemon.lock\"
 if [ -L \"\$lock\" ]; then
   exit 8
 elif [ -f \"\$lock\" ]; then
@@ -504,10 +503,10 @@ audit_unowned_daemon() {
   # Auditing the coordinator itself goes over SSH to localhost, so the local ssh
   # client (not an ancestor of the remote shell) carries this script, including
   # the patterns searched for; the token lets the audit skip its own processes.
-  token="parallel-workers-audit-$$-$RANDOM-$(date +%s)"
+  token="rota-audit-$$-$RANDOM-$(date +%s)"
   ssh_no_input "$target" "set -e
 : $token
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 lock=\"\$state_dir/daemon.lock\"
 [ ! -e \"\$lock\" ] && [ ! -L \"\$lock\" ]
 if [ '$require_idle' = 1 ]; then
@@ -538,7 +537,7 @@ fi
 audit_recovery_workers() {
   local host_id="$1" target="$2"
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 processes=\$(ps -ww -axo pid=,command=)
 while IFS=' ' read -r pid reservation_id; do
   [ -n \"\$pid\" ] || continue
@@ -581,7 +580,7 @@ quiesce_daemon() {
   fi
   [ "$lock_state" = PRESENT ] || die "invalid adaptive daemon lock state on $target"
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] || exit 8
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
@@ -605,14 +604,14 @@ exit 7" >/dev/null || die "cannot quiesce old adaptive daemon on $target"
 withhold_daemon_lease() {
   local target="$1"
   ssh_no_input "$target" \
-    "rm -f \"\$HOME/.parallel-workers/adaptive/$POOL_ID/lease.env\"" || \
+    "rm -f \"\$HOME/.rota/adaptive/$POOL_ID/lease.env\"" || \
     die "cannot close stale adaptive admission on $target"
 }
 
 daemon_running_state() {
   local target="$1"
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$state_dir/daemon.env\" ] || exit 9
 [ ! -L \"\$lock\" ] || exit 8
@@ -635,7 +634,7 @@ echo STOPPED"
 retire_stale_daemon_lock() {
   local target="$1"
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] || exit 0
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
@@ -650,7 +649,7 @@ recovery_helper() {
   helper_hash="$(env_value "$POOL_FILE" recovery_sha256)"
   [[ "$helper_hash" =~ ^[0-9a-f]{64}$ ]] || die "invalid recovery helper hash"
   printf '%s\n' "$payload" | "$SSH_BIN" -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" "$target" "set -e
-state=\"\$HOME/.parallel-workers/adaptive/$pool\"
+state=\"\$HOME/.rota/adaptive/$pool\"
 helper=\"\$state/bin/adaptive_recovery.py\"
 [ \"\$(shasum -a 256 \"\$helper\" | awk '{print \$1}')\" = '$helper_hash' ]
 python3 \"\$helper\" --state-dir \"\$state\""
@@ -805,7 +804,7 @@ pool_start() {
   local recover=0 expected_pool_id="" expected_pool_id_seen=0
   local final_state=ACTIVE coordinator_pid stored_pid
   local host_id target cpu memory enabled plan_state resource_source resource_tmp
-  RESOURCES_FILE="${PARALLEL_WORKERS_RESOURCES_FILE:-}"
+  RESOURCES_FILE="${ROTA_RESOURCES_FILE:-}"
   POOL_NAME="adaptive-$(date +%Y%m%d-%H%M%S)"
   SHARED_IO_CAPACITY="${ADAPTIVE_SHARED_IO_CAPACITY:-50}"
   IO_PRESSURE_HOST="${ADAPTIVE_IO_PRESSURE_HOST:-}"
@@ -1142,7 +1141,7 @@ daemon_idle() {
   fi
   [ "$lock_state" = PRESENT ] || return 1
   ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$POOL_ID\"
+state_dir=\"\$HOME/.rota/adaptive/$POOL_ID\"
 lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] && [ -f \"\$state_dir/status.tsv\" ]
 pid=\$(awk -F= '\$1 == \"pid\" {print \$2; exit}' \"\$lock\")
@@ -1469,7 +1468,7 @@ assert_memory_controls_supported() {
   while IFS=$'\t' read -r host target cpu memory enabled _; do
     [ "$enabled" = 1 ] || continue
     if ssh_no_input "$target" "set -e
-state_dir=\"\$HOME/.parallel-workers/adaptive/$pool\"
+state_dir=\"\$HOME/.rota/adaptive/$pool\"
 lock=\"\$state_dir/daemon.lock\"
 [ -f \"\$lock\" ] && [ ! -L \"\$lock\" ]
 grep -Fqx '$feature=1' \"\$lock\"

@@ -1341,7 +1341,7 @@ def _ssh(
     arguments = [
         os.environ.get("ADAPTIVE_SSH_BIN", "ssh"), "-o", "BatchMode=yes",
         "-o", f"ConnectTimeout={connect_timeout}", "-o", "ControlMaster=auto",
-        "-o", "ControlPersist=60", "-o", "ControlPath=/tmp/parallel-workers-adaptive-%C",
+        "-o", "ControlPersist=60", "-o", "ControlPath=/tmp/rota-adaptive-%C",
     ]
     if input_text is None:
         arguments.append("-n")
@@ -1363,7 +1363,7 @@ def _ssh(
 
 
 def _remote_dir(pool_id: str) -> str:
-    return f'"$HOME/.parallel-workers/adaptive/{pool_id}"'
+    return f'"$HOME/.rota/adaptive/{pool_id}"'
 
 
 def _recent(mtime: float) -> bool:

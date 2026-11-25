@@ -917,7 +917,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         (self.batch / "claims").mkdir()
         (self.root / "model").mkdir()
         (self.batch / "run_meta.env").write_text("total_jobs=2\n", encoding="utf-8")
-        remote_state = self.remote_home / ".parallel-workers" / "adaptive" / self.pool_id
+        remote_state = self.remote_home / ".rota" / "adaptive" / self.pool_id
         remote_state.mkdir(parents=True)
         (remote_state / "daemon.env").write_text(
             f"schema_version=1\npool_id={self.pool_id}\nhost_id=host-1\n", encoding="utf-8",
@@ -1011,7 +1011,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
 
     @property
     def remote_state(self) -> Path:
-        return self.remote_home / ".parallel-workers" / "adaptive" / self.pool_id
+        return self.remote_home / ".rota" / "adaptive" / self.pool_id
 
     def write_control(
         self, generation: int, admission: str, memory: int | None = None,

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+export ROTA_ROOT="${ROTA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 MODEL_DIR=""
 QUEUE_FILE="job_queue.txt"  # Default queue file name
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-}"
 BATCH_DIR=""
 HARD_STOP=0
 ADAPTIVE_CLOSE_TIMEOUT_SEC="${ADAPTIVE_CLOSE_TIMEOUT_SEC:-30}"
-ADAPTIVE_SCHEDULER_SCRIPT="${ADAPTIVE_SCHEDULER_SCRIPT:-${PARALLEL_WORKERS_ROOT}/adaptive_scheduler.sh}"
-VISIBLE_POOL_FILE="${ADAPTIVE_POOL_MARKER:-${ADAPTIVE_STATE_ROOT:-${PARALLEL_WORKERS_ROOT}/.parallel-workers/adaptive}/pool.env}"
+ADAPTIVE_SCHEDULER_SCRIPT="${ADAPTIVE_SCHEDULER_SCRIPT:-${ROTA_ROOT}/adaptive_scheduler.sh}"
+VISIBLE_POOL_FILE="${ADAPTIVE_POOL_MARKER:-${ADAPTIVE_STATE_ROOT:-${ROTA_ROOT}/.rota/adaptive}/pool.env}"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -177,10 +177,10 @@ if { [ -e "$VISIBLE_POOL_FILE" ] || [ -L "$VISIBLE_POOL_FILE" ]; } && \
 fi
 
 if [ "$EXECUTION_MODE" != "adaptive-shared-queue" ] && [ -z "$CONFIG_FILE" ]; then
-  if [[ -f ${PARALLEL_WORKERS_ROOT}/hosts/hosts-r.txt ]]; then
-    CONFIG_FILE=${PARALLEL_WORKERS_ROOT}/hosts/hosts-r.txt
+  if [[ -f ${ROTA_ROOT}/hosts/hosts-r.txt ]]; then
+    CONFIG_FILE=${ROTA_ROOT}/hosts/hosts-r.txt
   else
-    CONFIG_FILE=${PARALLEL_WORKERS_ROOT}/hosts-r.txt
+    CONFIG_FILE=${ROTA_ROOT}/hosts-r.txt
   fi
 fi
 

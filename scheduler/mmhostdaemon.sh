@@ -955,10 +955,10 @@ launch_one() {
   write_reservation "$reservation" "$id" "$queue_id" "$accepted_generation" \
     "$cpu" "$memory" "$io" "" starting || die "cannot create reservation $id"
   if command -v setsid >/dev/null 2>&1; then
-    PW_GPU_DEVICES="$devices" setsid bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
+    ROTA_GPU_DEVICES="$devices" setsid bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
       "$id" "$result" "$reservation" "$queue_hash" </dev/null >"$output" 2>&1 &
   else
-    PW_GPU_DEVICES="$devices" perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed\n"; exec @ARGV' \
+    ROTA_GPU_DEVICES="$devices" perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed\n"; exec @ARGV' \
       bash "$runner_path" 1 "$original" "$editable" "$model" "$log" "$lock" "$tag" \
       "$id" "$result" "$reservation" "$queue_hash" </dev/null >"$output" 2>&1 &
   fi

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-}"
+export ROTA_ROOT="${ROTA_ROOT:-}"
 set -euo pipefail
 
 # One queue-progress collection, printed as the collector's TSV: scan worker
 # processes on every host, then collect queue metadata where the share is
 # directly attached (on the coordinator over SSH, or here in local mode).
-ROOT="${PARALLEL_WORKERS_ROOT}"
+ROOT="${ROTA_ROOT}"
 COLLECTOR_SCRIPT=""
 WORKER_SCRIPT=""
 HOSTS=""
@@ -75,5 +75,5 @@ collector_name="$(basename "$COLLECTOR_SCRIPT")"
 collector_args="--root $root_q --limit $LIMIT --hosts $hosts_q --process_scan_file /dev/stdin --self_timeout_sec $remote_timeout_sec --data_only$NO_REGISTRY$ETA_WARNINGS"
 ssh -o BatchMode=yes -o ConnectTimeout=6 -o ConnectionAttempts=1 \
   -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "$FALLBACK_HOST" \
-  "if [ -f $collector_q ]; then exec bash $collector_q $collector_args; elif [ -f \"\$HOME/parallel-workers-monitor/$collector_name\" ]; then exec bash \"\$HOME/parallel-workers-monitor/$collector_name\" $collector_args; else exit 127; fi" \
+  "if [ -f $collector_q ]; then exec bash $collector_q $collector_args; elif [ -f \"\$HOME/rota-monitor/$collector_name\" ]; then exec bash \"\$HOME/rota-monitor/$collector_name\" $collector_args; else exit 127; fi" \
   < "$worker_file"

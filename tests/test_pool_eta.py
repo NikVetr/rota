@@ -49,47 +49,44 @@ class PoolEtaTests(unittest.TestCase):
         self.assertEqual(forecast([host()], {"A": queue(3, math.inf)}, [], 2, allocate), {})
 
     def test_coordinator_snapshot_reaches_both_reported_estimates(self):
-        # "agent": the daemon row's record type in pools started before its rename.
-        for record in ("daemon", "agent"):
-            with self.subTest(record=record):
-                with tempfile.TemporaryDirectory() as tmp:
-                    state = Path(tmp)
-                    for name in ("last-known", "queues"):
-                        (state / name).mkdir()
-                    now = int(time.time())
-                    resource = state / "hosts.tsv"
-                    resource.write_text("host_id\tenabled\tcpu_units\tmemory_mib\nnode\t1\t2\t1000\n")
-                    (state / "pool.env").write_text(
-                        f"pool_id=pool\nstate=ACTIVE\nlease_seconds=60\nshared_io_capacity=2\nresources_file={resource}\n")
-                    (state / "coordinator.ready").write_text(f"pool_id=pool\nstate=ready\nupdated_epoch={now}\n")
-                    (state / "last-known/node.tsv").write_text(
-                        "record_type\tpool_id\thost_id\tstate\ttelemetry_state\tresource_sample_epoch\tlive_cpu_units\tlive_memory_mib\n"
-                        f"{record}\tpool\tnode\tactive\tok\t{now}\t2\t1000\n")
-                    for q, left in [("A", 10), ("B", 60)]:
-                        batch = state / q
-                        for name in ("adaptive", "claims", "done"):
-                            (batch / name).mkdir(parents=True)
-                        (state / "queues" / (q + ".env")).write_text(f"queue_id={q}\npool_id=pool\nbatch_dir={batch}\n")
-                        (batch / "run_meta.env").write_text(f"run_token={q}\npool_id=pool\ntotal_jobs={left+1}\n")
-                        (batch / "adaptive/resources.env").write_text("cpu_units_per_job=1\nshared_io_units_per_job=1\n")
-                        (batch / "adaptive/status.env").write_text(
-                            f"queue_id={q}\nupdated_epoch={now}\nlifecycle=RUNNING\nrunning_by_host=node:1\n"
-                            "admission=enabled\nblocking_reason=none\neffective_memory_mib_per_job=100\n"
-                            "schedule_priority=50\nmax_workers=0\n")
-                        for job, start in [("sample", now-100), ("running", now)]:
-                            claim = batch / "claims" / ("job_" + job + ".claim")
-                            claim.mkdir()
-                            (claim / "owner.json").write_text(json.dumps({"reservation_id": "pool.node.1"}))
-                            os.utime(claim, (start, start))
-                        done = batch / "done/job_sample.done"
-                        done.touch()
-                        os.utime(done, (now - 40, now - 40))
-                    report = json.loads(subprocess.check_output(
-                        [sys.executable, str(ROOT / "monitor_pool_eta.py"), "--root", str(SCHEDULER),
-                         "--state-root", str(state), "--json"], text=True))
-                    for q, fixed, pool in [("A", 600, 600), ("B", 3600, 2100)]:
-                        self.assertAlmostEqual(report[q]["allocation_eta_sec"], fixed, delta=3)
-                        self.assertAlmostEqual(report[q]["pool_eta_sec"], pool, delta=3)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            for name in ("last-known", "queues"):
+                (state / name).mkdir()
+            now = int(time.time())
+            resource = state / "hosts.tsv"
+            resource.write_text("host_id\tenabled\tcpu_units\tmemory_mib\nnode\t1\t2\t1000\n")
+            (state / "pool.env").write_text(
+                f"pool_id=pool\nstate=ACTIVE\nlease_seconds=60\nshared_io_capacity=2\nresources_file={resource}\n")
+            (state / "coordinator.ready").write_text(f"pool_id=pool\nstate=ready\nupdated_epoch={now}\n")
+            (state / "last-known/node.tsv").write_text(
+                "record_type\tpool_id\thost_id\tstate\ttelemetry_state\tresource_sample_epoch\tlive_cpu_units\tlive_memory_mib\n"
+                f"daemon\tpool\tnode\tactive\tok\t{now}\t2\t1000\n")
+            for q, left in [("A", 10), ("B", 60)]:
+                batch = state / q
+                for name in ("adaptive", "claims", "done"):
+                    (batch / name).mkdir(parents=True)
+                (state / "queues" / (q + ".env")).write_text(f"queue_id={q}\npool_id=pool\nbatch_dir={batch}\n")
+                (batch / "run_meta.env").write_text(f"run_token={q}\npool_id=pool\ntotal_jobs={left+1}\n")
+                (batch / "adaptive/resources.env").write_text("cpu_units_per_job=1\nshared_io_units_per_job=1\n")
+                (batch / "adaptive/status.env").write_text(
+                    f"queue_id={q}\nupdated_epoch={now}\nlifecycle=RUNNING\nrunning_by_host=node:1\n"
+                    "admission=enabled\nblocking_reason=none\neffective_memory_mib_per_job=100\n"
+                    "schedule_priority=50\nmax_workers=0\n")
+                for job, start in [("sample", now-100), ("running", now)]:
+                    claim = batch / "claims" / ("job_" + job + ".claim")
+                    claim.mkdir()
+                    (claim / "owner.json").write_text(json.dumps({"reservation_id": "pool.node.1"}))
+                    os.utime(claim, (start, start))
+                done = batch / "done/job_sample.done"
+                done.touch()
+                os.utime(done, (now - 40, now - 40))
+            report = json.loads(subprocess.check_output(
+                [sys.executable, str(ROOT / "monitor_pool_eta.py"), "--root", str(SCHEDULER),
+                 "--state-root", str(state), "--json"], text=True))
+            for q, fixed, pool in [("A", 600, 600), ("B", 3600, 2100)]:
+                self.assertAlmostEqual(report[q]["allocation_eta_sec"], fixed, delta=3)
+                self.assertAlmostEqual(report[q]["pool_eta_sec"], pool, delta=3)
 
     def test_tail_runs_to_completion_and_waiting_queue_uses_first_released_slot(self):
         jobs = {"A": queue(0, 60), "B": queue(1, 30)}

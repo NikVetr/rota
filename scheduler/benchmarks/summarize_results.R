@@ -9,8 +9,8 @@ get_arg <- function(flag, default = NULL) {
   args[idx[length(idx)] + 1]
 }
 
-shared_root <- Sys.getenv("PARALLEL_WORKERS_ROOT")
-if (!nzchar(shared_root)) stop("Source the inventory environment or export PARALLEL_WORKERS_ROOT for the job")
+shared_root <- Sys.getenv("ROTA_ROOT")
+if (!nzchar(shared_root)) stop("Source the inventory environment or export ROTA_ROOT for the job")
 project_dir <- file.path(shared_root, "stan_projects/test/benchmarks")
 run_id <- get_arg("--run_id", NA)
 if (is.na(run_id) || !nzchar(run_id)) stop("Missing --run_id")

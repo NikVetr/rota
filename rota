@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Rota's front-door command. Checkout tools run from the checkout this script belongs to; every
+# other command goes to the scheduler scripts deployed on the shared root ($ROTA_ROOT).
+set -euo pipefail
+
+ROOT="${ROTA_ROOT:-}"
+source="${BASH_SOURCE[0]}"
+while [ -L "$source" ]; do
+  target="$(readlink "$source")"
+  case "$target" in /*) source="$target" ;; *) source="$(dirname "$source")/$target" ;; esac
+done
+HERE="$(cd "$(dirname "$source")" && pwd)"
+
+usage() {
+  cat <<EOF
+Usage: rota <command> [arguments...]
+
+From a checkout:
+  control describe|apply   Machine-readable pool controls (JSON), as Agent Bar uses them
+  config ...               Render or check the cluster inventory (cluster_config.py)
+  doctor                   Check this host's setup
+  monitor ...              Start the tmux dashboard (start_monitoring.sh)
+  deploy ...               Deploy the scheduler to the shared root (deploy.sh)
+
+Through the shared root (${ROOT:-\$ROTA_ROOT, unset: source the inventory environment}):
+  start ...                Launch a queue (start_workers.sh)
+  kill ...                 Stop a queue's workers (kill_workers.sh)
+  reconcile ...            Find and rerun a queue's missing jobs (reconcile_queue_batch.sh)
+  <scheduler command> ...  Any adaptive_scheduler.sh command, for example submit,
+                           pool-status, queue-status, pause, resume, set-priority,
+                           pool-start or pool-drain (rota help-scheduler lists them all)
+EOF
+}
+
+checkout() {
+  [ -e "$HERE/$1" ] || { echo "rota: '$2' runs from a Rota checkout; $HERE/$1 is missing" >&2; exit 2; }
+}
+
+shared() {
+  [ -n "$ROOT" ] || { echo "rota: source the inventory environment first (ROTA_ROOT is unset)" >&2; exit 2; }
+  [ -x "$ROOT/$1" ] || { echo "rota: $ROOT/$1 is not deployed or not executable" >&2; exit 2; }
+}
+
+command="${1:-help}"
+[ "$#" -eq 0 ] || shift
+case "$command" in
+  help|-h|--help) usage ;;
+  help-scheduler) shared adaptive_scheduler.sh; exec "$ROOT/adaptive_scheduler.sh" --help ;;
+  control) checkout rota_control.py control; exec python3 "$HERE/rota_control.py" "$@" ;;
+  config) checkout cluster_config.py config; exec python3 "$HERE/cluster_config.py" "$@" ;;
+  doctor) checkout doctor doctor; exec "$HERE/doctor" "$@" ;;
+  monitor) checkout start_monitoring.sh monitor; exec "$HERE/start_monitoring.sh" "$@" ;;
+  deploy) checkout deploy.sh deploy; exec "$HERE/deploy.sh" "$@" ;;
+  start) shared start_workers.sh; exec "$ROOT/start_workers.sh" "$@" ;;
+  kill) shared kill_workers.sh; exec "$ROOT/kill_workers.sh" "$@" ;;
+  reconcile) shared reconcile_queue_batch.sh; exec "$ROOT/reconcile_queue_batch.sh" "$@" ;;
+  *) shared adaptive_scheduler.sh; exec "$ROOT/adaptive_scheduler.sh" "$command" "$@" ;;
+esac

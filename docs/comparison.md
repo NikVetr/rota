@@ -1,6 +1,6 @@
-# How Parallel Workers compares with other schedulers
+# How Rota compares with other schedulers
 
-Parallel Workers is a job scheduler for a handful of trusted macOS and Linux machines that share
+Rota is a job scheduler for a handful of trusted macOS and Linux machines that share
 one drive. This page compares it with Slurm, Kubernetes, GNU Parallel and other systems, and says
 when each fits better. External facts come from each project's documentation as of November 2026;
 see [Sources](#sources).
@@ -15,9 +15,9 @@ see [Sources](#sources).
 | In-process distributed frameworks | Ray, Dask | Python programs that build task graphs |
 | Ad-hoc multi-host fan-out | GNU Parallel `--sshlogin` | One user running one command list over SSH |
 | Single-machine queues | task-spooler, pueue | One user on one machine |
-| **Small shared-drive pool** | **Parallel Workers** | One person or a small trusted group with a few personal or lab machines |
+| **Small shared-drive pool** | **Rota** | One person or a small trusted group with a few personal or lab machines |
 
-Parallel Workers sits between GNU Parallel and HTCondor or Slurm. Like GNU Parallel, it needs only
+Rota sits between GNU Parallel and HTCondor or Slurm. Like GNU Parallel, it needs only
 SSH and standard tools: no root, no system services, no database and no containers. Unlike GNU
 Parallel, it keeps a persistent pool. Many queues share each host's CPU, memory and shared-drive
 I/O budgets by priority, and their priorities and limits can change while jobs run.
@@ -27,7 +27,7 @@ Celery is a task queue for Python functions, not a scheduler for shell commands.
 
 ### Terms
 
-| Parallel Workers | Meaning | Nearest term elsewhere |
+| Rota | Meaning | Nearest term elsewhere |
 | --- | --- | --- |
 | pool | The hosts and one coordinator, started together | HTCondor pool; a Slurm cluster |
 | coordinator | One process that plans how many jobs each host runs | Slurm controller (`slurmctld`), HTCondor central manager |
@@ -37,7 +37,7 @@ Celery is a task queue for Python functions, not a scheduler for shell commands.
 | reservation | The CPU, memory and devices charged to one running job | Kubernetes resource request, HTCondor dynamic slot |
 | lease | How long a host keeps acting on its last plan without hearing from the coordinator | Kubernetes node lease |
 
-## What Parallel Workers has that the others mostly lack
+## What Rota has that the others mostly lack
 
 - **No installation beyond SSH.**
   - It is Bash, Python's standard library and plain files on a shared drive
@@ -82,13 +82,13 @@ Celery is a task queue for Python functions, not a scheduler for shell commands.
   - Controls, resets and recoveries are recorded with reasons.
   - Deploys require a clean Git tree, and each pool runs hash-pinned copies of the scheduler.
 
-## What the others have that Parallel Workers lacks
+## What the others have that Rota lacks
 
-The last column says whether Parallel Workers now covers the gap as an opt-in setting
+The last column says whether Rota now covers the gap as an opt-in setting
 ([operations guide](operations.md#opt-in-host-and-queue-features)), or whether it could
 without giving up its design goals: no root, no services, macOS support.
 
-| Feature | Who has it | In Parallel Workers |
+| Feature | Who has it | In Rota |
 | --- | --- | --- |
 | **Enforced resource limits** (cgroups) | Slurm, HTCondor and PBS on Linux; Kubernetes; Nomad on Linux | **Partly, opt-in.** `--memory_limit_mib` ends a job whose process tree exceeds the limit at a resource sample, on macOS and Linux. It is not a kernel limit: a fast spike can pass between samples. Linux cgroups (`systemd-run --user --scope -p MemoryMax=…`) would be a possible hardening where user delegation is enabled. |
 | **Preemption, suspend or requeue** | Slurm, HTCondor, Kueue, Volcano, Nomad | **Owner-triggered only, opt-in.** `owner_active: "suspend"` stops a host's running jobs while its owner is at the keyboard and resumes them afterwards. Preemption by priority, stopping or requeuing lower-priority work, stays absent by design: jobs are claimed exactly once and need not be safe to rerun. |
@@ -106,7 +106,7 @@ without giving up its design goals: no root, no services, macOS support.
 
 ## Comparison at a glance
 
-| | Parallel Workers | Slurm | Kubernetes + Kueue | HTCondor | GNU Parallel | Ray / Dask |
+| | Rota | Slurm | Kubernetes + Kueue | HTCondor | GNU Parallel | Ray / Dask |
 | --- | --- | --- | --- | --- | --- | --- |
 | Install | SSH, Bash, Python | root daemons, controller, optional DB | control plane, etcd, containers | several daemons | Perl, SSH | Python packages |
 | macOS execution hosts | yes | no | no | Darwin port | yes | single-node Ray; Dask runs, no stated support |
@@ -140,12 +140,12 @@ flowchart TD
     oneoff -- yes --> parallel[GNU Parallel<br/>--sshlogin, or pueue<br/>on one machine]
     oneoff -- no --> drive{{Do all hosts mount<br/>one drive at the<br/>same path?}}
     drive -- no --> condor[HTCondor, or<br/>GNU Parallel with<br/>file transfer]
-    drive -- yes --> pw[Parallel Workers]
+    drive -- yes --> pw[Rota]
     %% Invisible links keep the answers in one column beside the questions, so the chart stays narrow.
     slurm ~~~ k8s ~~~ ray ~~~ slurm2 ~~~ parallel ~~~ condor
 ```
 
-**Choose Parallel Workers when:**
+**Choose Rota when:**
 - you have a few personal or lab machines, including Macs, and one drive they all mount;
 - one person or a trusted group runs shell commands that take minutes to hours;
 - you want to change priorities, pause queues and lend machines without administrator help or
@@ -167,7 +167,7 @@ flowchart TD
 
 ## Sources
 
-Parallel Workers: [README](../README.md), [operations guide](operations.md).
+Rota: [README](../README.md), [operations guide](operations.md).
 
 - Slurm:
   - [administrator quick start](https://slurm.schedmd.com/quickstart_admin.html)

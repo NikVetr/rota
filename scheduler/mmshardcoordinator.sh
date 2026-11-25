@@ -15,7 +15,7 @@ POLL_SEC="$5"
 SSH_CONNECT_TIMEOUT_SEC="${6:-5}"
 PULL_TIMEOUT_SEC="${7:-15}"
 SHARD_DIR="$BATCH_DIR/shards"
-LOCAL_ROOT="${TMPDIR:-/tmp}/parallel-workers-shard-coordinator/$RUN_TOKEN"
+LOCAL_ROOT="${TMPDIR:-/tmp}/rota-shard-coordinator/$RUN_TOKEN"
 COORDINATOR_STATE="$SHARD_DIR/coordinator.env"
 
 case "$POLL_SEC:$SSH_CONNECT_TIMEOUT_SEC:$PULL_TIMEOUT_SEC" in
@@ -101,7 +101,7 @@ pull_progress_bundle() {
 
   mkdir -p "$pull_dir"
   ssh -n -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT_SEC" -o ConnectionAttempts=1 "$host" \
-    "state_dir=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN\"; \
+    "state_dir=\"\$HOME/.rota/runs/$RUN_TOKEN\"; \
      [ -f \"\$state_dir/progress/progress.env\" ] || exit 3; \
      cd \"\$state_dir\"; \
      tar -cf - progress/progress.env progress/succeeded_ids.txt progress/failed_ids.txt" \
@@ -133,7 +133,7 @@ pull_final_joblog() {
   local local_joblog="$LOCAL_ROOT/${host_key}.parallel-joblog.tsv"
 
   if ssh -n -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT_SEC" -o ConnectionAttempts=1 "$host" \
-    "joblog=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN/parallel-joblog.tsv\"; [ -f \"\$joblog\" ] && cat \"\$joblog\"" \
+    "joblog=\"\$HOME/.rota/runs/$RUN_TOKEN/parallel-joblog.tsv\"; [ -f \"\$joblog\" ] && cat \"\$joblog\"" \
     > "$local_joblog" 2>/dev/null; then
     publish_atomic "$local_joblog" "$SHARD_DIR/${host_key}.parallel-joblog.tsv" || true
   fi

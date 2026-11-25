@@ -126,7 +126,7 @@ def main():
     parser.add_argument("mode", choices=["watch", "sample", "render", "width"])
     parser.add_argument("--file")
     parser.add_argument("--node-label", action="append", default=[])
-    parser.add_argument("--root", default=os.environ.get("PARALLEL_WORKERS_ROOT", ""))
+    parser.add_argument("--root", default=os.environ.get("ROTA_ROOT", ""))
     parser.add_argument("--boot-json")
     parser.add_argument("--minis-json", default="{}")
     parser.add_argument("--mini-host", action="append", default=[], metavar="NAME=SSH_TARGET")

@@ -130,7 +130,7 @@ def io_sample(root, interface, disk, interval):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["memory", "io", "mount"])
-    parser.add_argument("--root", default=os.environ.get("PARALLEL_WORKERS_ROOT", ""))
+    parser.add_argument("--root", default=os.environ.get("ROTA_ROOT", ""))
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--interface", default="")
     parser.add_argument("--disk", default="")

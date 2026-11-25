@@ -163,7 +163,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", nargs="?", choices=["stream"])
     parser.add_argument("--interval", type=float, default=1.5)
-    parser.add_argument("--root", default=os.environ.get("PARALLEL_WORKERS_ROOT", ""))
+    parser.add_argument("--root", default=os.environ.get("ROTA_ROOT", ""))
     parser.add_argument("--once", action="store_true", help="print one sample and exit (requires --json)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--swap_report_gib", type=float, default=4.0,

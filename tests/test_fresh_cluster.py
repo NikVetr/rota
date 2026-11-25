@@ -70,13 +70,13 @@ raise SystemExit(subprocess.run(["bash", "-c", args[1]], env=os.environ).returnc
                 while time.monotonic() < deadline and not all(p.exists() for p in markers):
                     time.sleep(0.2)
                 self.assertTrue(all(p.exists() for p in markers),
-                                (share / ".parallel-workers/adaptive/coordinator.log").read_text())
+                                (share / ".rota/adaptive/coordinator.log").read_text())
                 self.assertEqual([(model / f"results/{n}.txt").read_text() for n in (3, 7)], ["9\n", "49\n"])
                 command("pool-drain")
                 deadline = time.monotonic() + 30
-                while time.monotonic() < deadline and (share / ".parallel-workers/adaptive/pool.env").exists():
+                while time.monotonic() < deadline and (share / ".rota/adaptive/pool.env").exists():
                     time.sleep(0.2)
-                self.assertFalse((share / ".parallel-workers/adaptive/pool.env").exists())
+                self.assertFalse((share / ".rota/adaptive/pool.env").exists())
             finally:
                 # Only terminate processes executing scripts inside this fixture.
                 # Never use a global scheduler-name match or a network command.

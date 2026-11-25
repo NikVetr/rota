@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:?Source the inventory environment first}"
+export ROTA_ROOT="${ROTA_ROOT:?Source the inventory environment first}"
 
 set -euo pipefail
 
 MODE=all
 CHECK_ONLY=0
-COORDINATOR="${PARALLEL_WORKERS_COORDINATOR:-}"
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
+COORDINATOR="${ROTA_COORDINATOR:-}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-${ROTA_ROOT}/hosts/hosts-ethernet.txt}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
-DEPLOY_LOCK=${PARALLEL_WORKERS_ROOT}/.parallel-workers/mode-transition.lock
+DEPLOY_LOCK=${ROTA_ROOT}/.rota/mode-transition.lock
 DEPLOY_LOCK_TOKEN="deploy-$$-$(date +%s)"
 DEPLOY_LOCK_HELD=0
-RETIRED_SCHEDULER_FILES=(mmadaptiveagent.sh)
 
 # Matches cluster_config.py: the root reaches job tags and remote commands unquoted.
-case "$PARALLEL_WORKERS_ROOT" in
+case "$ROTA_ROOT" in
   *[!A-Za-z0-9._+=@,:%~^#/-]*|*//*|*/|*/./*|*/.|*/../*|*/..|[!/]*|"")
-    echo "PARALLEL_WORKERS_ROOT must be a normalized absolute path using only letters," \
+    echo "ROTA_ROOT must be a normalized absolute path using only letters," \
       "digits and ._+=@,:%~^#- (no spaces, quotes or shell metacharacters)." >&2; exit 2 ;;
 esac
 
@@ -28,13 +27,13 @@ Options:
   --check                 Compare source and deployed files without changing them
   --scheduler-only        Deploy scheduler and benchmark scripts only
   --monitoring-only       Synchronize monitoring scripts only
-  --coordinator <host>    Override PARALLEL_WORKERS_COORDINATOR
+  --coordinator <host>    Override ROTA_COORDINATOR
   --hosts_file <path>     Hosts audited before scheduler deployment
 
 Scheduler deployment is refused while any scheduler process or adaptive pool
 is active. Files are staged beside their destination and then replaced
 atomically on the coordinator.
-Set PARALLEL_WORKERS_ROOT to the mounted shared drive.
+Set ROTA_ROOT to the mounted shared drive.
 EOF
 }
 
@@ -53,7 +52,7 @@ done
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -n "$COORDINATOR" ] || { echo "Source the inventory environment or pass --coordinator." >&2; exit 2; }
 SNAPSHOT_DIR="$REPO_DIR/scheduler"
-MONITOR_SYNC="$REPO_DIR/sync_parallel_workers_monitoring.sh"
+MONITOR_SYNC="$REPO_DIR/sync_rota_monitoring.sh"
 
 if [ ! -f "$HOSTS_FILE" ]; then
   echo "Hosts file not found: $HOSTS_FILE" >&2
@@ -104,13 +103,13 @@ audit_scheduler_idle() {
   local active=0
   local -a audit_hosts=("$COORDINATOR")
   local audited_hosts=$'\n'
-  local process_pattern='[m]mworker_|[m]mworker[.]sh|[m]mshardworker_|[m]mshardcoordinator_|[m]mhostdaemon|[m]madaptiveagent|[a]daptive_coordinator[.]py|[a]daptive_scheduler[.]sh|[s]tart_workers[.]sh|[k]ill_workers[.]sh|[r]econcile_queue_batch[.]sh|--[j]ob_tag'
+  local process_pattern='[m]mworker_|[m]mworker[.]sh|[m]mshardworker_|[m]mshardcoordinator_|[m]mhostdaemon|[a]daptive_coordinator[.]py|[a]daptive_scheduler[.]sh|[s]tart_workers[.]sh|[k]ill_workers[.]sh|[r]econcile_queue_batch[.]sh|--[j]ob_tag'
 
   acquire_deploy_lock || return 1
   if ! output=$(ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" \
-    "if [ -e '${PARALLEL_WORKERS_ROOT}/.parallel-workers/adaptive/pool.env' ] ||
-        [ -L '${PARALLEL_WORKERS_ROOT}/.parallel-workers/adaptive/pool.env' ]; then
-       cat '${PARALLEL_WORKERS_ROOT}/.parallel-workers/adaptive/pool.env' >&2
+    "if [ -e '${ROTA_ROOT}/.rota/adaptive/pool.env' ] ||
+        [ -L '${ROTA_ROOT}/.rota/adaptive/pool.env' ]; then
+       cat '${ROTA_ROOT}/.rota/adaptive/pool.env' >&2
        exit 4
      fi" 2>&1); then
     echo "Scheduler deployment refused: an adaptive pool marker exists or could not be audited." >&2
@@ -211,15 +210,15 @@ process_one() {
 
 write_version_marker() {
   local value="$1"
-  local incoming_file="${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION.incoming.$$"
+  local incoming_file="${ROTA_ROOT}/ROTA_VERSION.incoming.$$"
 
   printf '%s\n' "$value" | ssh "${SSH_OPTS[@]}" "$COORDINATOR" \
-    "cat > '$incoming_file' && chmod 644 '$incoming_file' && mv -f '$incoming_file' '${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION'"
+    "cat > '$incoming_file' && chmod 644 '$incoming_file' && mv -f '$incoming_file' '${ROTA_ROOT}/ROTA_VERSION'"
 }
 
 process_scheduler() {
   local status=0
-  local file version deployed_version_status deployed_version deployed_version_mode absent
+  local file version deployed_version_status deployed_version deployed_version_mode
 
   if [ "$CHECK_ONLY" -eq 0 ] && [ -n "$(git -C "$REPO_DIR" status --porcelain)" ]; then
     echo "Scheduler deployment requires a clean repository." >&2
@@ -237,7 +236,7 @@ process_scheduler() {
       status=1
       continue
     fi
-    process_one "$SNAPSHOT_DIR/$file" "${PARALLEL_WORKERS_ROOT}/$file" 755 || status=1
+    process_one "$SNAPSHOT_DIR/$file" "${ROTA_ROOT}/$file" 755 || status=1
   done
 
   for file in adaptive_coordinator.py adaptive_calibration.py adaptive_claim.py adaptive_memory.py adaptive_recovery.py adaptive_workflow.py; do
@@ -245,50 +244,30 @@ process_scheduler() {
       status=1
       continue
     fi
-    process_one "$SNAPSHOT_DIR/$file" "${PARALLEL_WORKERS_ROOT}/$file" 755 || status=1
+    process_one "$SNAPSHOT_DIR/$file" "${ROTA_ROOT}/$file" 755 || status=1
   done
 
   process_one "$SNAPSHOT_DIR/benchmarks/bench_job.R" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/bench_job.R" 755 || status=1
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/bench_job.R" 755 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/make_queue_stan_sv_box.sh" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/make_queue_stan_sv_box.sh" 755 || status=1
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/make_queue_stan_sv_box.sh" 755 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/monitor_cluster_cpu.sh" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/monitor_cluster_cpu.sh" 755 || status=1
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/monitor_cluster_cpu.sh" 755 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/summarize_results.R" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/summarize_results.R" 755 || status=1
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/summarize_results.R" 755 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/README.md" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/README.md" 644 || status=1
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/README.md" 644 || status=1
   process_one "$SNAPSHOT_DIR/benchmarks/Stan/models/stochastic_volatility.stan" \
-    "${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/Stan/models/stochastic_volatility.stan" 644 || status=1
-
-  # Scripts the scheduler no longer uses (mmadaptiveagent.sh became mmhostdaemon.sh). Deployment
-  # runs only with no pool marker and no scheduler process, so nothing can still execute them.
-  for file in "${RETIRED_SCHEDULER_FILES[@]}"; do
-    if [ "$CHECK_ONLY" -eq 1 ]; then
-      absent=0
-      ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" "[ ! -e '${PARALLEL_WORKERS_ROOT}/$file' ]" || absent=$?
-      if [ "$absent" -eq 1 ]; then
-        echo "RETIRED  ${PARALLEL_WORKERS_ROOT}/$file is still present"
-        status=1
-      elif [ "$absent" -ne 0 ]; then
-        echo "Cannot check for retired ${PARALLEL_WORKERS_ROOT}/$file" >&2
-        status=1
-      fi
-    elif ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" "rm -f '${PARALLEL_WORKERS_ROOT}/$file'"; then
-      echo "REMOVED  ${PARALLEL_WORKERS_ROOT}/$file"
-    else
-      status=1
-    fi
-  done
+    "${ROTA_ROOT}/stan_projects/test/benchmarks/Stan/models/stochastic_volatility.stan" 644 || status=1
 
   if [ "$CHECK_ONLY" -eq 1 ]; then
     deployed_version_status=$(ssh -n "${SSH_OPTS[@]}" "$COORDINATOR" \
-      "if [ -f '${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION' ]; then
-         cat '${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION'
-         if mode=\$(/usr/bin/stat -f '%Lp' '${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION' 2>/dev/null); then
+      "if [ -f '${ROTA_ROOT}/ROTA_VERSION' ]; then
+         cat '${ROTA_ROOT}/ROTA_VERSION'
+         if mode=\$(/usr/bin/stat -f '%Lp' '${ROTA_ROOT}/ROTA_VERSION' 2>/dev/null); then
            printf '%s\\n' \"\$mode\"
          else
-           /usr/bin/stat -c '%a' '${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION' 2>/dev/null
+           /usr/bin/stat -c '%a' '${ROTA_ROOT}/ROTA_VERSION' 2>/dev/null
          fi
        fi" || true)
     deployed_version=$(printf '%s\n' "$deployed_version_status" | awk 'NR == 1 {print $1}')
@@ -297,9 +276,9 @@ process_scheduler() {
     if [ "$deployed_version_mode" = 644 ] && [[ "$deployed_version" =~ ^[0-9a-f]{40}$ ]] &&
         git -C "$REPO_DIR" cat-file -e "${deployed_version}^{commit}" 2>/dev/null &&
         git -C "$REPO_DIR" diff --quiet "$deployed_version" "$version" -- scheduler; then
-      echo "CURRENT  ${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION (${deployed_version:0:7})"
+      echo "CURRENT  ${ROTA_ROOT}/ROTA_VERSION (${deployed_version:0:7})"
     else
-      echo "OUTDATED ${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION"
+      echo "OUTDATED ${ROTA_ROOT}/ROTA_VERSION"
       status=1
     fi
   else
@@ -307,7 +286,7 @@ process_scheduler() {
       return "$status"
     fi
     write_version_marker "$version" || return 1
-    echo "UPDATED  ${PARALLEL_WORKERS_ROOT}/PARALLEL_WORKERS_VERSION"
+    echo "UPDATED  ${ROTA_ROOT}/ROTA_VERSION"
   fi
 
   return "$status"

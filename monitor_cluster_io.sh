@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-}"
+export ROTA_ROOT="${ROTA_ROOT:-}"
 set -euo pipefail
 
-ROOT="${PARALLEL_WORKERS_ROOT}"
-INTERFACE="${PARALLEL_WORKERS_NETWORK_INTERFACE:-}"
-DISK="${PARALLEL_WORKERS_DISK:-}"
+ROOT="${ROTA_ROOT}"
+INTERFACE="${ROTA_NETWORK_INTERFACE:-}"
+DISK="${ROTA_DISK:-}"
 DISK_EXPLICIT=0
 [ -z "$DISK" ] || DISK_EXPLICIT=1
 REFRESH_SEC=3
@@ -91,8 +91,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REGISTRY_FILE="${REGISTRY_FILE:-$ROOT/QUEUE_PROGRESS.csv}"
 RATES_SCRIPT="${RATES_SCRIPT:-$SCRIPT_DIR/monitor_cluster_io_rates.py}"
-ADAPTIVE_STATE_ROOT="${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}"
-outage_dir="${PARALLEL_WORKERS_OUTAGE_LOG_DIR:-$HOME/Library/Logs/parallel-workers}"
+ADAPTIVE_STATE_ROOT="${ADAPTIVE_STATE_ROOT:-$ROOT/.rota/adaptive}"
+outage_dir="${ROTA_OUTAGE_LOG_DIR:-$HOME/Library/Logs/rota}"
 outage_pending=0
 outage_logged=unknown
 outage_retry_at=0
@@ -101,8 +101,8 @@ outage_log_error=""
 if [ -n "$STATE_FILE" ]; then
   LOCK_PATHS_FILE="${STATE_FILE%.json}.locks.txt"
 else
-  STATE_FILE="${TMPDIR:-/tmp}/parallel_workers_cluster_io_rates.json"
-  LOCK_PATHS_FILE="${TMPDIR:-/tmp}/parallel_workers_cluster_io_locks.txt"
+  STATE_FILE="${TMPDIR:-/tmp}/rota_cluster_io_rates.json"
+  LOCK_PATHS_FILE="${TMPDIR:-/tmp}/rota_cluster_io_locks.txt"
 fi
 
 mtime() {

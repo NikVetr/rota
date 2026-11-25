@@ -1,4 +1,4 @@
-"""pw-control describe/apply and the scheduler snapshot it is built from."""
+"""rota control describe/apply and the scheduler snapshot it is built from."""
 import copy
 import importlib.util
 import json
@@ -20,7 +20,7 @@ def load(name):
     return module
 
 
-control = load("pw_control")
+control = load("rota_control")
 snapshot_module = load("scheduler_snapshot")
 TAG = "_srv_cluster_proj__srv_cluster_proj_jobs.txt__h1234__b00003"
 QUEUE = {
@@ -132,9 +132,9 @@ class ApplyTests(unittest.TestCase):
 
     def apply(self, request, mode="ok"):
         request = {"protocol": 1, "request_id": "r1", "source": "test", **request}
-        env = dict(os.environ, PARALLEL_WORKERS_ROOT="/srv/cluster", PARALLEL_WORKERS_COORDINATOR="fixture", PW_CONTROL_SSH=str(self.root / "ssh"), FAKE_STATE=str(self.root / "state.json"),
+        env = dict(os.environ, ROTA_ROOT="/srv/cluster", ROTA_COORDINATOR="fixture", ROTA_CONTROL_SSH=str(self.root / "ssh"), FAKE_STATE=str(self.root / "state.json"),
                    FAKE_LOG=str(self.log), FAKE_MODE=mode)
-        result = subprocess.run([sys.executable, str(ROOT / "pw_control.py"), "apply"], input=json.dumps(request),
+        result = subprocess.run([sys.executable, str(ROOT / "rota_control.py"), "apply"], input=json.dumps(request),
                                 capture_output=True, text=True, env=env, timeout=60)
         commands = self.log.read_text().splitlines() if self.log.exists() else []
         self.log.unlink(missing_ok=True)
@@ -202,7 +202,7 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual((status, result["error"]["code"]), (1, "unreachable"))
         status, result, _ = self.apply(request, mode="refuse")
         self.assertEqual((status, result["error"]["code"]), (1, "not_supported"))
-        result = subprocess.run([sys.executable, str(ROOT / "pw_control.py"), "apply"], input="{not json",
+        result = subprocess.run([sys.executable, str(ROOT / "rota_control.py"), "apply"], input="{not json",
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertFalse(json.loads(result.stdout)["ok"])

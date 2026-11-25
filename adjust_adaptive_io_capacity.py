@@ -42,7 +42,7 @@ def command(pid: int) -> str:
 
 
 def validate(root: Path, pool_id: str, previous: int, capacity: int) -> dict[str, str]:
-    pool = record((root / ".parallel-workers/adaptive/pool.env").read_text())
+    pool = record((root / ".rota/adaptive/pool.env").read_text())
     if pool["pool_id"] != pool_id or pool["state"] != "ACTIVE":
         raise RuntimeError("expected ACTIVE pool is required; preserve pause/drain controls")
     if min(previous, capacity) < 1 or int(pool["shared_io_capacity"]) != previous:
@@ -65,7 +65,7 @@ def validate(root: Path, pool_id: str, previous: int, capacity: int) -> dict[str
     if (str(paths["coordinator"]) not in words or "--pool-id" not in words
             or words[words.index("--pool-id") + 1] != pool_id):
         raise RuntimeError("local coordinator PID identity mismatch")
-    owner = record((root / ".parallel-workers/adaptive/coordinator.lock/owner.env").read_text())
+    owner = record((root / ".rota/adaptive/coordinator.lock/owner.env").read_text())
     if owner != {"pool_id": pool_id, "pid": str(pid)}:
         raise RuntimeError("coordinator lock identity mismatch")
     return pool
@@ -73,9 +73,9 @@ def validate(root: Path, pool_id: str, previous: int, capacity: int) -> dict[str
 
 def adjust(root: Path, pool_id: str, previous: int, capacity: int, apply: bool) -> None:
     root = root.absolute()
-    state = root / ".parallel-workers/adaptive"
+    state = root / ".rota/adaptive"
     # Child scheduler calls must see --root, not whatever root the environment names.
-    cli = ["/usr/bin/env", f"PARALLEL_WORKERS_ROOT={root}", str(root / "adaptive_scheduler.sh")]
+    cli = ["/usr/bin/env", f"ROTA_ROOT={root}", str(root / "adaptive_scheduler.sh")]
     pool = validate(root, pool_id, previous, capacity)
     health = record(run([*cli, "pool-status"]))
     if any(health.get(k) != v for k, v in {
@@ -154,7 +154,7 @@ def adjust(root: Path, pool_id: str, previous: int, capacity: int, apply: bool) 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=os.environ.get("PARALLEL_WORKERS_ROOT"), required=not os.environ.get("PARALLEL_WORKERS_ROOT"))
+    parser.add_argument("--root", type=Path, default=os.environ.get("ROTA_ROOT"), required=not os.environ.get("ROTA_ROOT"))
     parser.add_argument("--expected-pool-id", required=True)
     parser.add_argument("--expected-capacity", type=int, required=True)
     parser.add_argument("--capacity", type=int, required=True)

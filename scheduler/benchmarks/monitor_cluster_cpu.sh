@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:?Source the inventory environment first}"
+export ROTA_ROOT="${ROTA_ROOT:?Source the inventory environment first}"
 set -euo pipefail
 
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:?Source the inventory environment first}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:?Source the inventory environment first}"
 INTERVAL_SEC=2
 
 usage() {

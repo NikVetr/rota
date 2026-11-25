@@ -7,7 +7,7 @@ HEIGHT=""
 WIDTH=""
 ONCE=0
 CPU_PANES=""
-ROOT="${PARALLEL_WORKERS_ROOT:-}"
+ROOT="${ROTA_ROOT:-}"
 HOST_LABELS=""
 SNAPSHOT=""
 SNAPSHOT_SCRIPT=""
@@ -81,7 +81,7 @@ fi
 
 REMOTE_BODY=$(cat <<'REMOTE'
 if [ "$(uname -s)" = Linux ]; then
-  exec python3 "$HOME/parallel-workers-monitor/monitor_linux.py" mount --root "$1"
+  exec python3 "$HOME/rota-monitor/monitor_linux.py" mount --root "$1"
 fi
 mount_table=$(/sbin/mount 2>/dev/null) || { printf 'UNKNOWN\n'; exit 2; }
 awk -v root="$1" '

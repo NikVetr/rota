@@ -73,7 +73,7 @@ def report(path, search, all_samples=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "parallel-workers"
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rota"
     parser.add_argument("--database", type=Path, default=state / "queue-eta.sqlite3")
     parser.add_argument("--queue", default="", help="substring of the label or queue ID")
     parser.add_argument("--all", action="store_true", help="show every recorded forecast; default: first in each progress quarter")

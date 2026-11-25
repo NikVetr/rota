@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+export ROTA_ROOT="${ROTA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 set -euo pipefail
 
 MODEL_DIR=""
@@ -8,8 +8,8 @@ BATCH_DIR=""
 RETRY_QUEUE_FILE=""
 RERUN_MISSING=0
 DEPENDENCY_REPLACEMENTS=()
-START_WORKERS_SCRIPT="${PARALLEL_WORKERS_ROOT}/start_workers.sh"
-ADAPTIVE_SCHEDULER_SCRIPT="${ADAPTIVE_SCHEDULER_SCRIPT:-${PARALLEL_WORKERS_ROOT}/adaptive_scheduler.sh}"
+START_WORKERS_SCRIPT="${ROTA_ROOT}/start_workers.sh"
+ADAPTIVE_SCHEDULER_SCRIPT="${ADAPTIVE_SCHEDULER_SCRIPT:-${ROTA_ROOT}/adaptive_scheduler.sh}"
 
 read_state() {
   local file="$1" key="$2" count

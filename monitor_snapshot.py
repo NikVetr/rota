@@ -19,7 +19,7 @@ import monitor_mac
 import monitor_sample
 import monitor_storage
 
-SERVICE = "parallel-workers-collector.service"
+SERVICE = "rota-collector.service"
 # The collector writes at least every 5 s; three missed heartbeats mean it stopped.
 STALE_SEC = 15
 START_HINT = (f"start it with: systemctl --user start {SERVICE} "
@@ -29,7 +29,7 @@ MAC_PRESSURE = {level: word for word, level in monitor_sample.PRESSURE.items()}
 
 def default_path():
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    return Path(os.environ.get("PARALLEL_WORKERS_CLUSTER_SNAPSHOT") or state / "parallel-workers" / "cluster-status.json")
+    return Path(os.environ.get("ROTA_CLUSTER_SNAPSHOT") or state / "rota" / "cluster-status.json")
 
 
 def age_text(seconds):
@@ -236,7 +236,7 @@ def main():
     parser.add_argument("--snapshot", type=Path, default=default_path())
     parser.add_argument("--host", help="host label (memory)")
     parser.add_argument("--hosts", default="", help="space-separated host labels in pane order (mount)")
-    parser.add_argument("--root", default=os.environ.get("PARALLEL_WORKERS_ROOT", ""))
+    parser.add_argument("--root", default=os.environ.get("ROTA_ROOT", ""))
     parser.add_argument("--width", type=int, default=32)
     args = parser.parse_args()
     reader = Reader(args.snapshot)

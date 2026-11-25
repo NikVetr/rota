@@ -5,7 +5,7 @@ Runs on the coordinator host, reading only its local scheduler state: the pool m
 the reviewed resource table with budget overrides and away windows, each registered queue's
 control, status and metadata files, its failed jobs (claimed, ended without a done marker, not
 rerun) and its per-host failure holds. The cluster status collector publishes the result as
-cluster-status.json's `scheduler` section, from which `pw-control describe` and failure events
+cluster-status.json's `scheduler` section, from which `rota control describe` and failure events
 are built.
 """
 import argparse
@@ -257,8 +257,8 @@ def snapshot(root, scheduler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    root = os.environ.get("PARALLEL_WORKERS_ROOT")
-    parser.add_argument("--state-root", type=Path, default=Path(root) / ".parallel-workers/adaptive" if root else None, required=not root)
+    root = os.environ.get("ROTA_ROOT")
+    parser.add_argument("--state-root", type=Path, default=Path(root) / ".rota/adaptive" if root else None, required=not root)
     parser.add_argument("--scheduler", type=Path, default=Path(root) / "adaptive_scheduler.sh" if root else None, required=not root)
     args = parser.parse_args()
     try:

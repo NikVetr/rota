@@ -34,7 +34,7 @@ pool retains its current budgets. Drain it before adopting an edited inventory,
 or use the scheduler’s live budget controls.
 
 For a second SSH route, add `fallback` to the host and run
-`admin/install_ssh_routes.sh "$PARALLEL_WORKERS_CONFIG_DIR"` on each machine
+`admin/install_ssh_routes.sh "$ROTA_CONFIG_DIR"` on each machine
 that initiates those connections. The primary and fallback must reach the same
 SSH server. A fallback route carries control traffic. Jobs that need shared
 storage still require a working mount.
@@ -59,7 +59,7 @@ Run these commands on the coordinator, with the generated environment sourced
 and `project` set to your project directory:
 
 ```bash
-scheduler="$PARALLEL_WORKERS_ROOT/adaptive_scheduler.sh"
+scheduler="$ROTA_ROOT/adaptive_scheduler.sh"
 "$scheduler" pool-status
 "$scheduler" submit --model_dir "$project" --queue jobs.txt \
   --project my-analysis --run_name pilot \
@@ -83,8 +83,8 @@ progress together.
 The direct dashboard samples the hosts over SSH. On a Linux dashboard host, the
 optional systemd user service instead collects shared snapshots for the CLI and
 Agent Bar. Install it from the checkout with the rendered environment sourced.
-Check it with `systemctl --user status parallel-workers-collector` or
-`journalctl --user -u parallel-workers-collector`. Rerun the installer after
+Check it with `systemctl --user status rota-collector` or
+`journalctl --user -u rota-collector`. Rerun the installer after
 changing inventories.
 
 ### Completion estimates
@@ -136,7 +136,7 @@ The shared monitor snapshot carries the pool estimate by default. To compare
 both estimates in seconds on the coordinator, run:
 
 ```bash
-python3 "$PARALLEL_WORKERS_ROOT/monitor_pool_eta.py" --root "$PARALLEL_WORKERS_ROOT" --json
+python3 "$ROTA_ROOT/monitor_pool_eta.py" --root "$ROTA_ROOT" --json
 ```
 
 `pool_eta_sec` includes capacity released by other queues.
@@ -204,7 +204,7 @@ waits for them. The default `"hold"` never stops a running job.
 shared I/O: a queue runs only where enough are free, and a large request reserves
 a drain host like a large CPU or memory request. The daemon assigns specific
 indices (0, 1, …) and exports them to the job as `CUDA_VISIBLE_DEVICES` and
-`PW_GPU_DEVICES`. The scheduler does not measure GPU use by other programs. A
+`ROTA_GPU_DEVICES`. The scheduler does not measure GPU use by other programs. A
 Mac's GPU cannot be divided, so `gpu_units: 1` there just runs one GPU job at a
 time.
 
@@ -236,4 +236,4 @@ queue status reports `cpu_seconds_succeeded`, `cpu_seconds_failed` and
 `jobs_with_usage`. The dashboard snapshot (`cluster-status.json`) reports them
 as CPU-hours in each queue row's `usage`. A finished queue keeps its final totals
 there for a week, across drains, from the coordinator's index in
-`.parallel-workers/retired-queues/` beside the pool state.
+`.rota/retired-queues/` beside the pool state.

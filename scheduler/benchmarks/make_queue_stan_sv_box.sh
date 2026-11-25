@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:?Source the inventory environment first}"
+export ROTA_ROOT="${ROTA_ROOT:?Source the inventory environment first}"
 set -euo pipefail
 
-MODEL_DIR="${PARALLEL_WORKERS_ROOT}/stan_projects/test"
+MODEL_DIR="${ROTA_ROOT}/stan_projects/test"
 N_JOBS=100
 TARGET_MINUTES=8
 RUN_ID=""
@@ -47,7 +47,7 @@ if [[ -z "$QUEUE_FILE" ]]; then
 fi
 
 QUEUE_PATH="$MODEL_DIR/queues/$QUEUE_FILE"
-BENCH_R="${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/bench_job.R"
+BENCH_R="${ROTA_ROOT}/stan_projects/test/benchmarks/bench_job.R"
 
 if [[ ! -f "$BENCH_R" ]]; then
   echo "Missing $BENCH_R" >&2
@@ -61,8 +61,8 @@ fi
 
 {
   for i in $(seq 1 "$N_JOBS"); do
-    printf "%d env PARALLEL_WORKERS_ROOT=%q Rscript %q --job_id %d --task stan_sv_box --run_id %q --target_minutes %q\n" \
-      "$i" "$PARALLEL_WORKERS_ROOT" "$BENCH_R" "$i" "$RUN_ID" "$TARGET_MINUTES"
+    printf "%d env ROTA_ROOT=%q Rscript %q --job_id %d --task stan_sv_box --run_id %q --target_minutes %q\n" \
+      "$i" "$ROTA_ROOT" "$BENCH_R" "$i" "$RUN_ID" "$TARGET_MINUTES"
   done
 } > "$QUEUE_PATH"
 
@@ -70,7 +70,7 @@ echo "Wrote: $QUEUE_PATH"
 echo "Run id: $RUN_ID"
 echo
 echo "Start (10 workers per host):"
-echo "  ${PARALLEL_WORKERS_ROOT}/start_workers.sh --model_dir $MODEL_DIR --queue $QUEUE_FILE --hosts_file ${PARALLEL_WORKERS_HOSTS_FILE}"
+echo "  ${ROTA_ROOT}/start_workers.sh --model_dir $MODEL_DIR --queue $QUEUE_FILE --hosts_file ${ROTA_HOSTS_FILE}"
 echo
 echo "Summarize:"
-echo "  Rscript ${PARALLEL_WORKERS_ROOT}/stan_projects/test/benchmarks/summarize_results.R --run_id $RUN_ID"
+echo "  Rscript ${ROTA_ROOT}/stan_projects/test/benchmarks/summarize_results.R --run_id $RUN_ID"

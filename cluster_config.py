@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import shlex
 
-RENDER_FORMAT = 5
+RENDER_FORMAT = 6
 HOST_KEYS = {"id", "ssh", "cpu_units", "memory_mib", "enabled"}
 # Opt-in host settings. They add resource-table columns only when some host sets one.
 HOST_OPTIONS = {"gpu_units": 0, "owner_idle_seconds": 0, "owner_active": "hold"}
@@ -106,17 +106,17 @@ def render(data, parent):
     hosts = data["hosts"]
     coordinator = next(h["ssh"] for h in hosts if h["id"] == data["coordinator"])
     env = {
-        "PARALLEL_WORKERS_CONFIG_DIR": str(directory),
-        "PARALLEL_WORKERS_ROOT": data["shared_root"],
-        "PARALLEL_WORKERS_COORDINATOR": coordinator,
-        "PARALLEL_WORKERS_HOSTS_FILE": str(directory / "hosts.txt"),
-        "PARALLEL_WORKERS_RESOURCES_FILE": str(directory / "adaptive-resources.tsv"),
+        "ROTA_CONFIG_DIR": str(directory),
+        "ROTA_ROOT": data["shared_root"],
+        "ROTA_COORDINATOR": coordinator,
+        "ROTA_HOSTS_FILE": str(directory / "hosts.txt"),
+        "ROTA_RESOURCES_FILE": str(directory / "adaptive-resources.tsv"),
         "ADAPTIVE_CLUSTER_HOSTS_FILE": str(directory / "hosts.txt"),
         "ADAPTIVE_SHARED_IO_CAPACITY": str(data["shared_io_capacity"]),
         "ADAPTIVE_IO_PRESSURE_HOST": data["io_pressure_host"],
         "ADAPTIVE_BACKFILL": str(int(data["backfill"])),
-        "PARALLEL_WORKERS_NETWORK_INTERFACE": data["network_interface"],
-        "PARALLEL_WORKERS_DISK": data["disk"],
+        "ROTA_NETWORK_INTERFACE": data["network_interface"],
+        "ROTA_DISK": data["disk"],
     }
     files = {
         "cluster.json": canonical,
@@ -129,7 +129,7 @@ def render(data, parent):
         # key under the primary name, so a fallback network cannot impersonate a host.
         "ssh_config": "# Generated from cluster.json; installed by admin/install_ssh_routes.sh.\n" + "".join(
             f"Host {h['ssh'].rpartition('@')[2]}\n"
-            f"  ProxyCommand ~/.ssh/parallel-workers-route.sh %h %p {h['fallback']}\n"
+            f"  ProxyCommand ~/.ssh/rota-route.sh %h %p {h['fallback']}\n"
             for h in hosts if "fallback" in h),
     }
     directory.mkdir(parents=True, exist_ok=True)
@@ -149,11 +149,11 @@ def load_monitor_environment():
     """Use the installer's local copy even when the share or login shell is unavailable."""
     config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     try:
-        settings = json.loads((config_home / "parallel-workers/monitor-environment.json").read_text())
+        settings = json.loads((config_home / "rota/monitor-environment.json").read_text())
     except FileNotFoundError:
         return
     for key, value in settings.items():
-        if key.startswith("PARALLEL_WORKERS_"):
+        if key.startswith("ROTA_"):
             os.environ.setdefault(key, value)
 
 

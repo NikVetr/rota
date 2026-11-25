@@ -88,9 +88,9 @@ class SnapshotDashboardTests(unittest.TestCase):
         (self.base / "queue-progress.tsv").write_text(TSV)
         (self.base / "hosts.txt").write_text("".join(f"u@{host['id']} 4 {host['id']}\n" for host in data["hosts"]))
         env = {key: value for key, value in os.environ.items() if key != "TMUX"}
-        env.update(PARALLEL_WORKERS_ROOT="/srv/cluster", PATH=f"{binary}{os.pathsep}{env['PATH']}", PARALLEL_WORKERS_HOSTS_FILE=str(self.base / "hosts.txt"),
-                   PARALLEL_WORKERS_CLUSTER_SNAPSHOT=str(self.base / "cluster-status.json"),
-                   PARALLEL_WORKERS_QUEUE_SNAPSHOT=str(self.base / "queue-progress.tsv"))
+        env.update(ROTA_ROOT="/srv/cluster", PATH=f"{binary}{os.pathsep}{env['PATH']}", ROTA_HOSTS_FILE=str(self.base / "hosts.txt"),
+                   ROTA_CLUSTER_SNAPSHOT=str(self.base / "cluster-status.json"),
+                   ROTA_QUEUE_SNAPSHOT=str(self.base / "queue-progress.tsv"))
         result = subprocess.run(["bash", str(ROOT / "start_tmux_monitoring.sh"), "--session", "mmm-test"],
                                 env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -125,7 +125,7 @@ class SnapshotDashboardTests(unittest.TestCase):
 
     def test_hosts_override_requires_direct_mode(self):
         result = subprocess.run(["bash", str(ROOT / "start_tmux_monitoring.sh"), "--hosts", "u@a"],
-                                capture_output=True, text=True, timeout=30, env=dict(os.environ, PARALLEL_WORKERS_ROOT="/srv/cluster"))
+                                capture_output=True, text=True, timeout=30, env=dict(os.environ, ROTA_ROOT="/srv/cluster"))
         self.assertEqual(result.returncode, 2)
         self.assertIn("--hosts requires --direct", result.stderr)
         remote = (ROOT / "start_tmux_monitoring_remote.sh").read_text()

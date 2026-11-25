@@ -1,6 +1,6 @@
 # Installed by admin/install_cluster_status_collector.sh, which fills in the repository path.
 [Unit]
-Description=parallel-workers cluster status collector (dashboard snapshot)
+Description=rota cluster status collector (dashboard snapshot)
 Documentation=file://@REPO_DIR@/docs/operations.md
 
 [Service]

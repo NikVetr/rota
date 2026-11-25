@@ -49,7 +49,7 @@ class RouteTests(unittest.TestCase):
         home, rendered = self.root / "home", self.root / "rendered"
         (home / ".ssh").mkdir(parents=True)
         rendered.mkdir()
-        (rendered / "ssh_config").write_text("Host 192.0.2.10\n  ProxyCommand ~/.ssh/parallel-workers-route.sh %h %p 198.51.100.10\n")
+        (rendered / "ssh_config").write_text("Host 192.0.2.10\n  ProxyCommand ~/.ssh/rota-route.sh %h %p 198.51.100.10\n")
         (home / ".ssh/config").write_text("Host scg\n  HostName login.example\n")
         env = dict(os.environ, HOME=str(home))
         installer = ["bash", str(ROOT / "admin/install_ssh_routes.sh")]
@@ -59,10 +59,10 @@ class RouteTests(unittest.TestCase):
         for _ in range(2):
             subprocess.run(installer + [str(rendered)], check=True, capture_output=True, env=env)
         self.assertEqual((home / ".ssh/config").read_text(),
-                         "Include parallel-workers.conf\nHost scg\n  HostName login.example\n")
+                         "Include rota.conf\nHost scg\n  HostName login.example\n")
         self.assertEqual(len(list((home / ".ssh").glob("config.bak-*"))), 1, "only the first install edits config")
-        self.assertEqual((home / ".ssh/parallel-workers.conf").read_text(), (rendered / "ssh_config").read_text())
-        self.assertTrue(os.access(home / ".ssh/parallel-workers-route.sh", os.X_OK))
+        self.assertEqual((home / ".ssh/rota.conf").read_text(), (rendered / "ssh_config").read_text())
+        self.assertTrue(os.access(home / ".ssh/rota-route.sh", os.X_OK))
         check = subprocess.run(installer + ["--check", str(rendered)], capture_output=True, text=True, env=env)
         self.assertEqual((check.returncode, check.stdout.split()[0]), (0, "CURRENT"))
 

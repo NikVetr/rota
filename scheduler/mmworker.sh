@@ -33,7 +33,7 @@ LOCK_RETRY_MIN_TENTHS="${LOCK_RETRY_MIN_TENTHS:-5}"
 LOCK_RETRY_MAX_TENTHS="${LOCK_RETRY_MAX_TENTHS:-20}"
 JOB_LOG_SYNC_SEC="${JOB_LOG_SYNC_SEC:-300}"
 JOB_LOG_LIVE_BYTES="${JOB_LOG_LIVE_BYTES:-262144}"
-LOCAL_JOB_LOG_ROOT="${LOCAL_JOB_LOG_ROOT:-${TMPDIR:-/tmp}/parallel-workers-job-logs}"
+LOCAL_JOB_LOG_ROOT="${LOCAL_JOB_LOG_ROOT:-${TMPDIR:-/tmp}/rota-job-logs}"
 WORKER_SLOT_OFFSET="${WORKER_SLOT_OFFSET:-0}"
 PARALLEL_WORKER_READY_FILE="${PARALLEL_WORKER_READY_FILE:-}"
 PARALLEL_WORKER_START_FILE="${PARALLEL_WORKER_START_FILE:-}"
@@ -46,9 +46,9 @@ ADAPTIVE_QUEUE_SHA256="${11:-}"
 ADAPTIVE_MODE=0
 ADAPTIVE_RESULT_WRITTEN=0
 # Devices the daemon assigned to this reservation (opt-in gpu_units); jobs see them as CUDA devices.
-if [ -n "${PW_GPU_DEVICES:-}" ]; then
-  export PW_GPU_DEVICES
-  export CUDA_VISIBLE_DEVICES="$PW_GPU_DEVICES"
+if [ -n "${ROTA_GPU_DEVICES:-}" ]; then
+  export ROTA_GPU_DEVICES
+  export CUDA_VISIBLE_DEVICES="$ROTA_GPU_DEVICES"
 fi
 ADAPTIVE_CLAIMED_JOB_ID=""
 
@@ -321,7 +321,7 @@ function publish_live_job_log {
   local local_stage="${local_log_file}.live.$$"
 
   if {
-    printf '[parallel-workers live tail snapshot; complete log is published when the job exits]\n'
+    printf '[rota live tail snapshot; complete log is published when the job exits]\n'
     tail -c "$JOB_LOG_LIVE_BYTES" "$local_log_file"
   } > "$local_stage" && cat "$local_stage" > "$shared_log_file" && chmod 666 "$shared_log_file"; then
     rm -f "$local_stage"

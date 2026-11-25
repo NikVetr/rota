@@ -9,7 +9,7 @@ result for each.
 ```bash
 project=$(bash examples/first-job/prepare.sh)
 cat "$project/queues/jobs.txt"
-scheduler="$PARALLEL_WORKERS_ROOT/adaptive_scheduler.sh"
+scheduler="$ROTA_ROOT/adaptive_scheduler.sh"
 "$scheduler" submit --model_dir "$project" --queue jobs.txt \
   --project first-job --run_name squares --cpu_units_per_job 1 --memory_mib_per_job 128
 ```

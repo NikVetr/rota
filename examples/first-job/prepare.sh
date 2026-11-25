@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # A separate project per invocation keeps previous results and queues intact.
-projects="${PARALLEL_WORKERS_ROOT:?Source the generated environment.sh first}/stan_projects"
+projects="${ROTA_ROOT:?Source the generated environment.sh first}/stan_projects"
 mkdir -p "$projects"
 project="$(mktemp -d "$projects/first-job.XXXXXX")"
 mkdir "$project/queues" "$project/results"

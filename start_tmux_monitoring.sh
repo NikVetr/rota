@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:?Source the inventory environment first}"
+export ROTA_ROOT="${ROTA_ROOT:?Source the inventory environment first}"
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION="monitoring"
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-${ROTA_ROOT}/hosts/hosts-ethernet.txt}"
 HOSTS_OVERRIDE=""
 LAYOUT="even-vertical"
 SHOW_MEMORY_PANEL=1
@@ -31,9 +31,9 @@ SNAPSHOT_SCRIPT="${SCRIPT_DIR}/monitor_snapshot.py"
 # collector service exists only for Linux, so Mac launchers default to --direct.
 DIRECT=0
 [ "$(uname -s)" != Darwin ] || DIRECT=1
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/parallel-workers"
-CLUSTER_SNAPSHOT="${PARALLEL_WORKERS_CLUSTER_SNAPSHOT:-$STATE_DIR/cluster-status.json}"
-QUEUE_SNAPSHOT="${PARALLEL_WORKERS_QUEUE_SNAPSHOT:-$STATE_DIR/queue-progress.tsv}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rota"
+CLUSTER_SNAPSHOT="${ROTA_CLUSTER_SNAPSHOT:-$STATE_DIR/cluster-status.json}"
+QUEUE_SNAPSHOT="${ROTA_QUEUE_SNAPSHOT:-$STATE_DIR/queue-progress.tsv}"
 SNAPSHOT_MOUNT_REFRESH_SEC=5
 SHOW_MOUNT_STATUS=1
 MOUNT_PANE_WIDTH_COLS=8
@@ -51,7 +51,7 @@ MIN_PROGRESS_LINES=15
 CPU_LINES_PER_HOST=3
 TMUX_STATUS_LINES=1
 DEFAULT_USER="$(id -un)"
-QUEUE_FALLBACK_HOST="${PARALLEL_WORKERS_COORDINATOR:-}"
+QUEUE_FALLBACK_HOST="${ROTA_COORDINATOR:-}"
 SSH_OPTS=(
   -tt
   -o BatchMode=yes
@@ -61,14 +61,14 @@ SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o ControlMaster=auto
   -o ControlPersist=600
-  -o ControlPath=/tmp/parallel-workers-ssh-%C
+  -o ControlPath=/tmp/rota-ssh-%C
 )
 
 # Reading long-lived UI helpers from an SMB-mounted script directory can stall
 # a Mac dashboard during server pressure. Prefer synchronized local copies when
 # this launcher itself came from the shared drive.
-LOCAL_MONITOR_DIR="${HOME}/parallel-workers-monitor"
-if [[ "$SCRIPT_DIR" == "$PARALLEL_WORKERS_ROOT" || "$SCRIPT_DIR" == "$PARALLEL_WORKERS_ROOT/"* ]] && [ -d "$LOCAL_MONITOR_DIR" ]; then
+LOCAL_MONITOR_DIR="${HOME}/rota-monitor"
+if [[ "$SCRIPT_DIR" == "$ROTA_ROOT" || "$SCRIPT_DIR" == "$ROTA_ROOT/"* ]] && [ -d "$LOCAL_MONITOR_DIR" ]; then
   [ -x "$LOCAL_MONITOR_DIR/monitor_queue_progress.sh" ] && PROGRESS_SCRIPT="$LOCAL_MONITOR_DIR/monitor_queue_progress.sh"
   [ -x "$LOCAL_MONITOR_DIR/monitor_queue_pane.sh" ] && QUEUE_PANE_SCRIPT="$LOCAL_MONITOR_DIR/monitor_queue_pane.sh"
   [ -x "$LOCAL_MONITOR_DIR/render_queue_progress.sh" ] && QUEUE_RENDER_SCRIPT="$LOCAL_MONITOR_DIR/render_queue_progress.sh"
@@ -104,9 +104,9 @@ Defaults:
 
 Notes:
 - Panes render $CLUSTER_SNAPSHOT, written by the
-  parallel-workers-collector user service, and open no SSH sessions. Without
+  rota-collector user service, and open no SSH sessions. Without
   a fresh snapshot they say so; start the service with
-  systemctl --user start parallel-workers-collector.service
+  systemctl --user start rota-collector.service
 - --direct samples every host over SSH from this launcher instead (the
   default on a Mac, which has no collector); --hosts requires it.
   --snapshot selects snapshot mode explicitly.
@@ -256,7 +256,7 @@ elif [[ -f "$HOSTS_FILE" ]]; then
     [[ "$host" == \#* ]] && continue
     hosts+=("$host")
   done < "$HOSTS_FILE"
-elif [[ -n "${PARALLEL_WORKERS_HOSTS_FILE:-}" ]]; then
+elif [[ -n "${ROTA_HOSTS_FILE:-}" ]]; then
   echo "Configured hosts file is unavailable: $HOSTS_FILE" >&2
   exit 1
 else
@@ -361,7 +361,7 @@ mk_cpu_pane_cmd() {
       --host "$label" --title-prefix "CPU $label" "--title-suffix=$suffix"
     return
   fi
-  remote="export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; exec python3 \"\$HOME/parallel-workers-monitor/monitor_cpu.py\""
+  remote="export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; exec python3 \"\$HOME/rota-monitor/monitor_cpu.py\""
   remote+=" --title-prefix $(printf '%q' "CPU $label") --title-suffix=$(printf '%q' "$suffix")"
   mk_ssh_cmd "${hosts[$index]}" "$(printf 'exec /bin/bash -lc %q' "$remote")" "CPU $label$suffix"
 }
@@ -387,9 +387,9 @@ fi
 
 REMOTE_MEM_CMD_TEMPLATE=$(cat <<'EOF'
 if [ "$(uname -s)" = Linux ]; then
-  exec python3 "$HOME/parallel-workers-monitor/monitor_linux.py" memory --interval __MEM_REFRESH_SEC__
+  exec python3 "$HOME/rota-monitor/monitor_linux.py" memory --interval __MEM_REFRESH_SEC__
 fi
-exec python3 "$HOME/parallel-workers-monitor/monitor_mac.py" memory --interval __MEM_REFRESH_SEC__
+exec python3 "$HOME/rota-monitor/monitor_mac.py" memory --interval __MEM_REFRESH_SEC__
 EOF
 )
 REMOTE_MEM_CMD="${REMOTE_MEM_CMD_TEMPLATE//__MEM_REFRESH_SEC__/$MEM_REFRESH_SEC}"
@@ -485,19 +485,19 @@ if [ "$SHOW_CLUSTER_IO" -eq 1 ] && [ "$DIRECT" -eq 0 ]; then
   # The panel and its storage lines come from the collector's coordinator stream.
   cluster_io_pane=$(tmux split-window -f -h -t "${cpu_panes[0]}" -l "$CLUSTER_IO_WIDTH_COLS" -P -F "#{pane_id}" \
     "$(mk_local_cmd "CLUSTER I/O" "" bash "$CLUSTER_IO_SCRIPT" --snapshot "$CLUSTER_SNAPSHOT" \
-      --root "$PARALLEL_WORKERS_ROOT" --refresh_sec "$CLUSTER_IO_REFRESH_SEC")")
+      --root "$ROTA_ROOT" --refresh_sec "$CLUSTER_IO_REFRESH_SEC")")
   tmux select-pane -t "$cluster_io_pane" -T "CLUSTER I/O $(mk_label "$QUEUE_FALLBACK_HOST")" || true
 elif [ "$SHOW_CLUSTER_IO" -eq 1 ]; then
   io_script_name="$(basename "$CLUSTER_IO_SCRIPT")"
   io_rates_name="monitor_cluster_io_rates.py"
-  storage_file="/tmp/parallel-workers-storage-${MONITOR_INSTANCE}.json"
-  printf -v root_q '%q' "$PARALLEL_WORKERS_ROOT"
-  printf -v io_script_q '%q' "$PARALLEL_WORKERS_ROOT/$io_script_name"
-  printf -v io_rates_q '%q' "$PARALLEL_WORKERS_ROOT/$io_rates_name"
-  io_options=" --rates_state_file $(printf '%q' "/tmp/parallel-workers-io-rates-${MONITOR_INSTANCE}.json")"
-  [ -z "${PARALLEL_WORKERS_NETWORK_INTERFACE:-}" ] || io_options+=" --interface $(printf '%q' "$PARALLEL_WORKERS_NETWORK_INTERFACE")"
-  [ -z "${PARALLEL_WORKERS_DISK:-}" ] || io_options+=" --disk $(printf '%q' "$PARALLEL_WORKERS_DISK")"
-  remote_io_cmd="if [ -f $io_script_q ] && [ -f $io_rates_q ]; then exec bash $io_script_q --root $root_q$io_options --refresh_sec $CLUSTER_IO_REFRESH_SEC --storage_file $(printf '%q' "$storage_file") --rates_script $io_rates_q; elif [ -f \"\$HOME/parallel-workers-monitor/$io_script_name\" ] && [ -f \"\$HOME/parallel-workers-monitor/$io_rates_name\" ]; then exec bash \"\$HOME/parallel-workers-monitor/$io_script_name\" --root $root_q$io_options --refresh_sec $CLUSTER_IO_REFRESH_SEC --storage_file $(printf '%q' "$storage_file") --rates_script \"\$HOME/parallel-workers-monitor/$io_rates_name\"; else echo 'Missing cluster I/O monitor scripts'; sleep 30; fi"
+  storage_file="/tmp/rota-storage-${MONITOR_INSTANCE}.json"
+  printf -v root_q '%q' "$ROTA_ROOT"
+  printf -v io_script_q '%q' "$ROTA_ROOT/$io_script_name"
+  printf -v io_rates_q '%q' "$ROTA_ROOT/$io_rates_name"
+  io_options=" --rates_state_file $(printf '%q' "/tmp/rota-io-rates-${MONITOR_INSTANCE}.json")"
+  [ -z "${ROTA_NETWORK_INTERFACE:-}" ] || io_options+=" --interface $(printf '%q' "$ROTA_NETWORK_INTERFACE")"
+  [ -z "${ROTA_DISK:-}" ] || io_options+=" --disk $(printf '%q' "$ROTA_DISK")"
+  remote_io_cmd="if [ -f $io_script_q ] && [ -f $io_rates_q ]; then exec bash $io_script_q --root $root_q$io_options --refresh_sec $CLUSTER_IO_REFRESH_SEC --storage_file $(printf '%q' "$storage_file") --rates_script $io_rates_q; elif [ -f \"\$HOME/rota-monitor/$io_script_name\" ] && [ -f \"\$HOME/rota-monitor/$io_rates_name\" ]; then exec bash \"\$HOME/rota-monitor/$io_script_name\" --root $root_q$io_options --refresh_sec $CLUSTER_IO_REFRESH_SEC --storage_file $(printf '%q' "$storage_file") --rates_script \"\$HOME/rota-monitor/$io_rates_name\"; else echo 'Missing cluster I/O monitor scripts'; sleep 30; fi"
 
 
   io_cols="$CLUSTER_IO_WIDTH_COLS"
@@ -505,7 +505,7 @@ elif [ "$SHOW_CLUSTER_IO" -eq 1 ]; then
   tmux select-pane -t "$cluster_io_pane" -T "CLUSTER I/O $(mk_label "$QUEUE_FALLBACK_HOST")" || true
   storage_args=(python3 "$(dirname "$CLUSTER_IO_SCRIPT")/monitor_storage.py" watch
     --host "$QUEUE_FALLBACK_HOST" --file "$storage_file" --session "$SESSION" --instance "$MONITOR_INSTANCE"
-    --root "$PARALLEL_WORKERS_ROOT")
+    --root "$ROTA_ROOT")
   for storage_host in "${hosts[@]}"; do
     storage_label="$(mk_label "$storage_host")"
     storage_args+=(--mini-host "$storage_label=$storage_host")
@@ -544,7 +544,7 @@ fi
 
 mount_pane=""
 if [ "$SHOW_MOUNT_STATUS" -eq 1 ]; then
-  mount_args=(bash "$MOUNT_STATUS_SCRIPT" --root "$PARALLEL_WORKERS_ROOT" --hosts "${hosts[*]}" --cpu_panes "${cpu_panes[*]}")
+  mount_args=(bash "$MOUNT_STATUS_SCRIPT" --root "$ROTA_ROOT" --hosts "${hosts[*]}" --cpu_panes "${cpu_panes[*]}")
   if [ "$DIRECT" -eq 0 ]; then
     mount_labels=""
     for h in "${hosts[@]}"; do mount_labels+="${mount_labels:+ }$(mk_label "$h")"; done
@@ -592,7 +592,7 @@ if [ "$SHOW_QUEUE_PROGRESS" -eq 1 ]; then
   queue_progress_mode="remote"
   coordinator_name="${QUEUE_FALLBACK_HOST#*@}"
   if [[ "$LAUNCHER_HOST" == "$coordinator_name" || "$LAUNCHER_HOST.local" == "$coordinator_name" ||
-        ( -z "${PARALLEL_WORKERS_HOSTS_FILE:-}" && "${LAUNCHER_HOST%%.*}" == "$(mk_label "$QUEUE_FALLBACK_HOST")" ) ]]; then
+        ( -z "${ROTA_HOSTS_FILE:-}" && "${LAUNCHER_HOST%%.*}" == "$(mk_label "$QUEUE_FALLBACK_HOST")" ) ]]; then
     queue_progress_mode="local"
   fi
 
@@ -611,14 +611,14 @@ if [ "$SHOW_QUEUE_PROGRESS" -eq 1 ]; then
   if [ "$DIRECT" -eq 0 ]; then
     # The collector is the only queue collector; this pane renders its TSV.
     progress_args+=(
-      --root "$PARALLEL_WORKERS_ROOT"
+      --root "$ROTA_ROOT"
       --snapshot_tsv "$QUEUE_SNAPSHOT"
       --snapshot_json "$CLUSTER_SNAPSHOT"
       --snapshot_script "$SNAPSHOT_SCRIPT"
     )
   else
     progress_args+=(
-      --root "$PARALLEL_WORKERS_ROOT"
+      --root "$ROTA_ROOT"
       --collector_script "$PROGRESS_SCRIPT"
       --collect_script "$QUEUE_COLLECT_SCRIPT"
       --worker_script "$QUEUE_WORKER_SCRIPT"

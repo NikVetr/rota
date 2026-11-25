@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sample the cluster once for every dashboard and publish one JSON snapshot.
 
-Runs on the launcher (the Ubuntu desktop) as the parallel-workers-collector user service.
+Runs on the launcher (the Ubuntu desktop) as the rota-collector user service.
 Each remote host keeps one SSH session running monitor_sample.py, the launcher samples
 itself as a local process, the coordinator's I/O arrives on one monitor_cluster_io.sh --json
 stream, and queues are collected every 30 s. mmm and the desktop top bar render the result
@@ -32,7 +32,7 @@ import queue_eta_history
 
 SCHEMA = 1
 SCRIPT_DIR = Path(__file__).resolve().parent
-REMOTE_DIR = "$HOME/parallel-workers-monitor"
+REMOTE_DIR = "$HOME/rota-monitor"
 REMOTE_PATH = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"'
 # A dedicated connection per stream: a shared master would tie every stream to one socket.
 SSH_OPTIONS = ("-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
@@ -56,7 +56,7 @@ def log(message):
 
 
 def default_state_dir():
-    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "parallel-workers"
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rota"
 
 
 def runtime_snapshot(state):
@@ -64,7 +64,7 @@ def runtime_snapshot(state):
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime or not Path(runtime).is_dir():
         return state / "cluster-status.json"
-    target = Path(runtime) / "parallel-workers" / "cluster-status.json"
+    target = Path(runtime) / "rota" / "cluster-status.json"
     target.parent.mkdir(mode=0o700, exist_ok=True)
     link = state / "cluster-status.json"
     if not (link.is_symlink() and os.readlink(link) == str(target)):
@@ -358,8 +358,8 @@ class Collector:
         self.coordinator = coordinator
         host_id, target = coordinator
         arguments = ["--json", "--root", self.args.root, "--refresh_sec", str(IO_REFRESH_SEC),
-                     "--rates_state_file", "/tmp/parallel-workers-collector-io-rates.json"]
-        for option, variable in (("--interface", "PARALLEL_WORKERS_NETWORK_INTERFACE"), ("--disk", "PARALLEL_WORKERS_DISK")):
+                     "--rates_state_file", "/tmp/rota-collector-io-rates.json"]
+        for option, variable in (("--interface", "ROTA_NETWORK_INTERFACE"), ("--disk", "ROTA_DISK")):
             if os.environ.get(variable):
                 arguments += [option, os.environ[variable]]
         self.shared = {"host": host_id, "ok": False, "error": "connecting", "updated": None}
@@ -522,11 +522,11 @@ class Collector:
 
     # -- output ------------------------------------------------------------
     def collect_scheduler(self):
-        """The coordinator's controllable state (scheduler_snapshot.py), for pw-control and the top bar."""
+        """The coordinator's controllable state (scheduler_snapshot.py), for rota control and the top bar."""
         with self.lock:
             _, target = self.coordinator
         command = stream_command(target, is_local(target), "scheduler_snapshot.py",
-                                 ["--state-root", f"{self.args.root}/.parallel-workers/adaptive",
+                                 ["--state-root", f"{self.args.root}/.rota/adaptive",
                                   "--scheduler", f"{self.args.root}/adaptive_scheduler.sh"],
                                  self.args.remote_dir)
         attempted, error, state = round(time.time(), 3), None, None
@@ -651,20 +651,20 @@ def main():
     from cluster_config import load_monitor_environment
     load_monitor_environment()
     state = default_state_dir()
-    root = os.environ.get("PARALLEL_WORKERS_ROOT", "")
+    root = os.environ.get("ROTA_ROOT", "")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", default=root, required=not root)
-    parser.add_argument("--hosts_file", default=os.environ.get("PARALLEL_WORKERS_HOSTS_FILE"), required=not os.environ.get("PARALLEL_WORKERS_HOSTS_FILE"))
+    parser.add_argument("--hosts_file", default=os.environ.get("ROTA_HOSTS_FILE"), required=not os.environ.get("ROTA_HOSTS_FILE"))
     parser.add_argument("--hosts_cache", type=Path, default=state / "hosts-ethernet.txt")
     parser.add_argument("--snapshot", type=Path, default=None,
                         help="default: $XDG_RUNTIME_DIR, linked from the state directory")
     parser.add_argument("--queue_snapshot", type=Path,
-                        default=Path(os.environ.get("PARALLEL_WORKERS_QUEUE_SNAPSHOT") or state / "queue-progress.tsv"))
+                        default=Path(os.environ.get("ROTA_QUEUE_SNAPSHOT") or state / "queue-progress.tsv"))
     parser.add_argument("--memory_events", type=Path, default=state / "memory-events.jsonl",
                         help="JSON lines of the largest processes on hosts with high swap (default: %(default)s)")
     parser.add_argument("--failure_events", type=Path, default=state / "events.jsonl",
                         help="JSON lines of settled failure incidents for Agent Bar (default: %(default)s)")
-    parser.add_argument("--coordinator", default=os.environ.get("PARALLEL_WORKERS_COORDINATOR", ""),
+    parser.add_argument("--coordinator", default=os.environ.get("ROTA_COORDINATOR", ""),
                         help="SSH target of the host whose local disk is the shared volume")
     parser.add_argument("--remote_dir", default=REMOTE_DIR,
                         help="monitor helper directory on remote hosts (default: %(default)s)")
@@ -679,7 +679,7 @@ def main():
     if not re.fullmatch(r"(\$HOME/)?[A-Za-z0-9_./-]+", args.remote_dir):
         parser.error("--remote_dir must be a plain path, optionally starting with $HOME/")
     if args.snapshot is None:
-        override = os.environ.get("PARALLEL_WORKERS_CLUSTER_SNAPSHOT")
+        override = os.environ.get("ROTA_CLUSTER_SNAPSHOT")
         args.snapshot = Path(override) if override else runtime_snapshot(state)
     collector = Collector(args)
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):

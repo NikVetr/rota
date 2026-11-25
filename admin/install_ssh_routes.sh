@@ -16,10 +16,10 @@ source_config=$1
 [ -f "$source_config" ] || { echo "install_ssh_routes: no ssh_config at $source_config" >&2; exit 1; }
 
 ssh_dir=$HOME/.ssh
-config=$ssh_dir/parallel-workers.conf
-route=$ssh_dir/parallel-workers-route.sh
+config=$ssh_dir/rota.conf
+route=$ssh_dir/rota-route.sh
 user_config=$ssh_dir/config
-include='Include parallel-workers.conf'
+include='Include rota.conf'
 route_source="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ssh_route.sh"
 
 if [ "$check" -eq 1 ]; then

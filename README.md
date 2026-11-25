@@ -1,6 +1,7 @@
-# Parallel workers
+# Rota
 
-A lightweight SSH job scheduler for small, trusted macOS/Linux clusters.
+A lightweight SSH job scheduler for small, trusted macOS/Linux clusters. A rota is a
+schedule of turns; here it is also the **R**esource- and **O**wner-aware **T**ask **A**llocator.
 
 ![Three queues share four hosts. Each square is one CPU unit held by a running job; a higher-priority queue fills slots as other jobs finish.](docs/figures/loop-pool-overview.gif)
 
@@ -51,19 +52,28 @@ how a queue can finish sooner when another queue releases its workers. See
 
    The generated file lives under the configured shared root. Source that same
    file in any new admin, coordinator or dashboard shell. If administering from
-   another machine, `ssh "$PARALLEL_WORKERS_COORDINATOR"` opens the coordinator
+   another machine, `ssh "$ROTA_COORDINATOR"` opens the coordinator
    shell. Source the file there too.
 4. From the coordinator checkout, deploy to an idle cluster and start its pool:
 
    ```bash
    ./deploy.sh --scheduler-only
-   ./sync_parallel_workers_monitoring.sh
-   "$PARALLEL_WORKERS_ROOT/adaptive_scheduler.sh" pool-start
+   ./sync_rota_monitoring.sh
+   "$ROTA_ROOT/adaptive_scheduler.sh" pool-start
    ```
 
 5. **[Run your first two jobs and verify their results](examples/first-job/README.md).**
    The example includes the worker script and needs only Python. The
    [operations guide](docs/operations.md) covers your own workloads.
+
+### The `rota` command
+
+`rota <command>` is the front door. From a checkout it runs `control` (the JSON
+pool controls Agent Bar uses), `config`, `doctor`, `monitor` and `deploy`. Every
+other command goes to the scheduler on the shared root: `rota submit`,
+`rota pool-status`, `rota pause`, `rota start`, `rota kill`, `rota reconcile`
+and the rest of `rota help-scheduler`. The collector installer below links it
+into `~/.local/bin`; elsewhere, `ln -s "$PWD/rota" ~/.local/bin/rota`.
 
 ### Open the dashboard
 
@@ -72,7 +82,7 @@ On the dashboard host, source the generated environment and run
 For the shared snapshot used by the CLI and Agent Bar on Linux, run
 `./admin/install_cluster_status_collector.sh` from that configured shell, then
 `./start_monitoring.sh`. The installer keeps a local copy of the inventory
-settings for the service and `pw-control`. Rerun the installer after selecting
+settings for the service and `rota control`. Rerun the installer after selecting
 a different inventory. [Monitor and recover](docs/operations.md#monitor-and-recover)
 
 ## Supported workloads
@@ -92,5 +102,5 @@ uses a fixture in place of SSH.
 
 ## License
 
-Parallel Workers is licensed under the GNU General Public License, version 2
+Rota is licensed under the GNU General Public License, version 2
 or any later version (SPDX `GPL-2.0-or-later`). See [LICENSE](LICENSE).

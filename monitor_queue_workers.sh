@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-}"
+export ROTA_ROOT="${ROTA_ROOT:-}"
 set -euo pipefail
 
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-${ROTA_ROOT}/hosts/hosts-ethernet.txt}"
 HOSTS_OVERRIDE=""
 SSH_CONNECT_TIMEOUT_SEC=3
 SSH_SCAN_TIMEOUT_SEC=15
@@ -81,7 +81,7 @@ scan_host() {
   if scan_out="$(perl -e 'alarm shift; exec @ARGV' "$SSH_SCAN_TIMEOUT_SEC" \
     ssh -o BatchMode=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT_SEC" -o ConnectionAttempts=2 \
     -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-    -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=/tmp/parallel-workers-ssh-%C \
+    -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=/tmp/rota-ssh-%C \
     "$host" "$REMOTE_SCAN_CMD" 2>/dev/null)"; then
     scan_ok=1
   fi

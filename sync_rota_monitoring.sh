@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:?Source the inventory environment first}"
+export ROTA_ROOT="${ROTA_ROOT:?Source the inventory environment first}"
 
 set -euo pipefail
 
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-${PARALLEL_WORKERS_ROOT}/hosts/hosts-ethernet.txt}"
-COORDINATOR="${PARALLEL_WORKERS_COORDINATOR:-}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-${ROTA_ROOT}/hosts/hosts-ethernet.txt}"
+COORDINATOR="${ROTA_COORDINATOR:-}"
 CHECK_ONLY=0
 
 usage() {
   cat <<'EOF'
-Usage: sync_parallel_workers_monitoring.sh [--check] [--hosts_file <path>] [--coordinator <user@host>]
+Usage: sync_rota_monitoring.sh [--check] [--hosts_file <path>] [--coordinator <user@host>]
 
-Atomically update monitoring scripts at PARALLEL_WORKERS_ROOT and in
-~/parallel-workers-monitor on every selected host. --check is read-only.
+Atomically update monitoring scripts at ROTA_ROOT and in
+~/rota-monitor on every selected host. --check is read-only.
 EOF
 }
 
@@ -77,15 +77,15 @@ sync_target() {
 set -euo pipefail
 
 if [ "$target_kind" = shared ]; then
-  target_dir=${PARALLEL_WORKERS_ROOT}
+  target_dir=${ROTA_ROOT}
 else
-  target_dir="$HOME/parallel-workers-monitor"
+  target_dir="$HOME/rota-monitor"
 fi
 if [ "$check_only" -eq 1 ]; then
-  stage=$(mktemp -d "${TMPDIR:-/tmp}/parallel-workers-monitor.XXXXXX")
+  stage=$(mktemp -d "${TMPDIR:-/tmp}/rota-monitor.XXXXXX")
 else
   mkdir -p "$target_dir"
-  stage=$(mktemp -d "$target_dir/.parallel-workers-monitor.XXXXXX")
+  stage=$(mktemp -d "$target_dir/.rota-monitor.XXXXXX")
 fi
 trap 'rm -rf "$stage"' EXIT
 tar -xf - -C "$stage"
@@ -159,7 +159,7 @@ for file in "${files[@]}"; do
 done
 REMOTE
   )
-  remote_command="PARALLEL_WORKERS_ROOT=$(printf '%q' "$PARALLEL_WORKERS_ROOT") target_kind=$(printf '%q' "$target_kind") check_only=$CHECK_ONLY bash -c $(printf '%q' "$remote_code")"
+  remote_command="ROTA_ROOT=$(printf '%q' "$ROTA_ROOT") target_kind=$(printf '%q' "$target_kind") check_only=$CHECK_ONLY bash -c $(printf '%q' "$remote_code")"
 
   if [ "$CHECK_ONLY" -eq 1 ]; then
     if tar -cf - -C "$REPO_DIR" "${MONITOR_FILES[@]}" |
@@ -189,7 +189,7 @@ while read -r host slots _; do
     status=1
     continue
   fi
-  [ "$slots" -gt 0 ] || [ -n "${PARALLEL_WORKERS_HOSTS_FILE:-}" ] || continue
+  [ "$slots" -gt 0 ] || [ -n "${ROTA_HOSTS_FILE:-}" ] || continue
   sync_target "$host" mirror "monitor mirror on $host" || status=1
 done < "$HOSTS_FILE"
 

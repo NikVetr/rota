@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Machine-facing scheduler controls: `pw-control describe` and `pw-control apply`.
+"""Machine-facing scheduler controls: `rota control describe` and `rota control apply`.
 
 describe prints the adaptive pool's state and the controls available now, built only from the
 collector's cluster-status.json (its `scheduler` section comes from scheduler_snapshot.py on
@@ -28,10 +28,10 @@ PROTOCOL = 1
 STALE_SEC = 120  # the collector refreshes scheduler state every 30 s
 LOCK_RETRY_SEC = 10
 SSH_TIMEOUT_SEC = 30
-ROOT = os.environ.get("PARALLEL_WORKERS_ROOT", "")
-COORDINATOR = os.environ.get("PARALLEL_WORKERS_COORDINATOR")
-REMOTE_DIR = "$HOME/parallel-workers-monitor"
-SNAPSHOT = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "parallel-workers/cluster-status.json"
+ROOT = os.environ.get("ROTA_ROOT", "")
+COORDINATOR = os.environ.get("ROTA_COORDINATOR")
+REMOTE_DIR = "$HOME/rota-monitor"
+SNAPSHOT = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rota/cluster-status.json"
 SCHEDULER = f"{ROOT}/adaptive_scheduler.sh"
 CALIBRATION_JOBS = (20, 50)
 CALIBRATION_SECONDS = (600, 86400)
@@ -196,7 +196,7 @@ def describe(snapshot, now=None):
     unavailable = pool.get("unavailable_hosts", {})
     return {
         "protocol": PROTOCOL,
-        "scheduler": {"name": "parallel-workers", "version": scheduler.get("schema")},
+        "scheduler": {"name": "rota", "version": scheduler.get("schema")},
         "as_of": scheduler.get("updated"),
         "coordinator": {"reachable": reachable, "label": (snapshot.get("shared") or {}).get("host"),
                         "error": None if reachable else error or "no scheduler state yet"},
@@ -232,14 +232,14 @@ def ssh(arguments, script):
     target = COORDINATOR
     if not target or not ROOT:
         raise Refused("unreachable", "Source the inventory environment or configure the collector.")
-    return subprocess.run([os.environ.get("PW_CONTROL_SSH", "ssh"), "-o", "BatchMode=yes",
+    return subprocess.run([os.environ.get("ROTA_CONTROL_SSH", "ssh"), "-o", "BatchMode=yes",
                            "-o", "ConnectTimeout=10", *arguments, target, script],
                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=SSH_TIMEOUT_SEC)
 
 
 def fresh_state():
     script = (f"exec python3 {REMOTE_DIR}/scheduler_snapshot.py --state-root "
-              f"{shlex.quote(ROOT + '/.parallel-workers/adaptive')} --scheduler {shlex.quote(SCHEDULER)}")
+              f"{shlex.quote(ROOT + '/.rota/adaptive')} --scheduler {shlex.quote(SCHEDULER)}")
     result = ssh(["-n"], script)
     if result.returncode == 255:
         raise Refused("unreachable", result.stderr.strip() or "the coordinator host cannot be reached", True)
@@ -407,7 +407,7 @@ def run_scheduler(arguments, request, audit_target):
                        audit_target, request["control"], json.dumps(request.get("value"), sort_keys=True)])
     # The audit line is written only after the command succeeds, beside the pool's other controls.
     script = (f"{command} && printf '%s\\n' {shlex.quote(audit)} >> "
-              f"{shlex.quote(ROOT + '/.parallel-workers/adaptive/control-audit.tsv')}")
+              f"{shlex.quote(ROOT + '/.rota/adaptive/control-audit.tsv')}")
     deadline = time.monotonic() + LOCK_RETRY_SEC
     while True:
         result = ssh(["-n"], script)
@@ -446,7 +446,7 @@ def apply(request):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="rota control", description=__doc__)
     parser.add_argument("command", choices=["describe", "apply"])
     parser.add_argument("--snapshot", type=Path, default=SNAPSHOT)
     args = parser.parse_args()

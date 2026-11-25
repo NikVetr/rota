@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+export ROTA_ROOT="${ROTA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 MODEL_DIR=""
 QUEUE_FILE="job_queue.txt"  # Default queue file name
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-}"
 RUN_NAME=""
 PROJECT_NAME=""
 PROJECT_OPTION_SET=0
@@ -207,16 +207,16 @@ if [ "$EXECUTION_MODE" = "adaptive-shared-queue" ]; then
   CONFIG_FILE=""
 elif [[ -n "$HOSTS_FILE" ]]; then
   CONFIG_FILE="$HOSTS_FILE"
-elif [[ -f ${PARALLEL_WORKERS_ROOT}/hosts/hosts-r.txt ]]; then
-  CONFIG_FILE=${PARALLEL_WORKERS_ROOT}/hosts/hosts-r.txt
+elif [[ -f ${ROTA_ROOT}/hosts/hosts-r.txt ]]; then
+  CONFIG_FILE=${ROTA_ROOT}/hosts/hosts-r.txt
 else
-  CONFIG_FILE=${PARALLEL_WORKERS_ROOT}/hosts-r.txt
+  CONFIG_FILE=${ROTA_ROOT}/hosts-r.txt
 fi
-WORKER_SCRIPT="${WORKER_SCRIPT:-${PARALLEL_WORKERS_ROOT}/mmworker.sh}"
+WORKER_SCRIPT="${WORKER_SCRIPT:-${ROTA_ROOT}/mmworker.sh}"
 ADAPTIVE_COORDINATOR_SCRIPT="${ADAPTIVE_COORDINATOR_SCRIPT:-$(dirname "$0")/adaptive_coordinator.py}"
-SHARD_WORKER_SCRIPT="${SHARD_WORKER_SCRIPT:-${PARALLEL_WORKERS_ROOT}/mmshardworker.sh}"
-SHARD_COORDINATOR_SCRIPT="${SHARD_COORDINATOR_SCRIPT:-${PARALLEL_WORKERS_ROOT}/mmshardcoordinator.sh}"
-STATE_ROOT="${PARALLEL_WORKERS_STATE_ROOT:-${PARALLEL_WORKERS_ROOT}/.parallel-workers}"
+SHARD_WORKER_SCRIPT="${SHARD_WORKER_SCRIPT:-${ROTA_ROOT}/mmshardworker.sh}"
+SHARD_COORDINATOR_SCRIPT="${SHARD_COORDINATOR_SCRIPT:-${ROTA_ROOT}/mmshardcoordinator.sh}"
+STATE_ROOT="${ROTA_STATE_ROOT:-${ROTA_ROOT}/.rota}"
 ADAPTIVE_STATE_ROOT="${ADAPTIVE_STATE_ROOT:-$STATE_ROOT/adaptive}"
 ADAPTIVE_POOL_MARKER="${ADAPTIVE_POOL_MARKER:-$ADAPTIVE_STATE_ROOT/pool.env}"
 MODE_TRANSITION_LOCK="${MODE_TRANSITION_LOCK:-$(dirname "$ADAPTIVE_STATE_ROOT")/mode-transition.lock}"
@@ -346,7 +346,7 @@ case "$COORDINATOR_FS" in
   cifs|smb*|nfs*|fuse*|osxfuse*)
     if [ "$ALLOW_NETWORK_COORDINATOR" -ne 1 ]; then
       echo "Error: refusing to coordinate a queue from network filesystem type '$COORDINATOR_FS'." >&2
-      echo "Run this command on the storage host, where ${PARALLEL_WORKERS_ROOT} is directly attached." >&2
+      echo "Run this command on the storage host, where ${ROTA_ROOT} is directly attached." >&2
       echo "Use --allow_network_coordinator only for an explicitly audited exception." >&2
       exit 1
     fi
@@ -1165,7 +1165,7 @@ verify_remote_ack() {
 
   output="$(
     ssh -n "${SSH_COMMON_OPTS[@]}" "$host" \
-      "state_dir=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN\"; \
+      "state_dir=\"\$HOME/.rota/runs/$RUN_TOKEN\"; \
        state_file=\"\$state_dir/state.env\"; ready_file=\"\$state_dir/ready.env\"; \
        [ -f \"\$state_file\" ] && [ -f \"\$ready_file\" ] || exit 3; \
        grep -q '^run_token=$RUN_TOKEN$' \"\$state_file\" || exit 4; \
@@ -1200,7 +1200,7 @@ record_host_issue() {
 remote_bootstrap_summary() {
   local host="$1"
   ssh -n "${SSH_COMMON_OPTS[@]}" "$host" \
-    "file=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN/bootstrap.log\"; \
+    "file=\"\$HOME/.rota/runs/$RUN_TOKEN/bootstrap.log\"; \
      [ -f \"\$file\" ] && sed -n '1,12p' \"\$file\"" 2>/dev/null | tr '\t\r\n' '   '
 }
 
@@ -1210,7 +1210,7 @@ release_ready_hosts() {
   local release_failed=0
 
   release_epoch=$(( $(date +%s) + WORKER_RELEASE_DELAY_SEC ))
-  release_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/parallel-workers-release.XXXXXX")"
+  release_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rota-release.XXXXXX")"
   while IFS= read -r host; do
     [ -n "$host" ] || continue
     release_hosts+=("$host")
@@ -1221,7 +1221,7 @@ release_ready_hosts() {
     release_file="$release_tmp_dir/release_${index}.out"
     release_outputs+=("$release_file")
     ssh -n "${SSH_COMMON_OPTS[@]}" "$host" \
-      "state_dir=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN\"; \
+      "state_dir=\"\$HOME/.rota/runs/$RUN_TOKEN\"; \
        state_file=\"\$state_dir/state.env\"; ready_file=\"\$state_dir/ready.env\"; start_file=\"\$state_dir/start.env\"; \
        [ -f \"\$state_file\" ] && [ -f \"\$ready_file\" ] || exit 3; \
        grep -q '^run_token=$RUN_TOKEN$' \"\$ready_file\" || exit 4; \
@@ -1262,7 +1262,7 @@ stop_ready_hosts() {
   while IFS= read -r host; do
     [ -n "$host" ] || continue
     if ssh -n "${SSH_COMMON_OPTS[@]}" "$host" \
-      "state_dir=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN\"; \
+      "state_dir=\"\$HOME/.rota/runs/$RUN_TOKEN\"; \
        state_file=\"\$state_dir/state.env\"; \
        [ -f \"\$state_file\" ] || exit 3; \
        grep -q '^run_token=$RUN_TOKEN$' \"\$state_file\" || exit 4; \
@@ -1290,7 +1290,7 @@ verify_remote_stage() {
   local rc
 
   ssh -n "${SSH_COMMON_OPTS[@]}" "$host" \
-    "stage_file=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN/staged.env\"; \
+    "stage_file=\"\$HOME/.rota/runs/$RUN_TOKEN/staged.env\"; \
      [ -f \"\$stage_file\" ] || exit 3; \
      grep -q '^run_token=$RUN_TOKEN$' \"\$stage_file\" || exit 4; \
      grep -q '^commands_sha256=$shard_hash$' \"\$stage_file\" || exit 5; \
@@ -1318,7 +1318,7 @@ while read -r HOST CORES _; do
   run_with_timeout "$SSH_LAUNCH_TIMEOUT_SEC" ssh \
     "${SSH_COMMON_OPTS[@]}" \
     "$HOST" "set -e
-  state_parent=\"\$HOME/.parallel-workers/runs\"
+  state_parent=\"\$HOME/.rota/runs\"
   state_dir=\"\$state_parent/$RUN_TOKEN\"
   mkdir -p \"\$state_parent\"
   if ! mkdir \"\$state_dir\" 2>/dev/null; then
@@ -1449,7 +1449,7 @@ launch_shard_hosts() {
     HOST_TOTAL=$((HOST_TOTAL + 1))
     SHARD_FILE="$SHARD_DIR/${HOST_KEY}.commands.txt"
     SHARD_HASH="$(shasum -a 256 "$SHARD_FILE" | awk '{print $1}')"
-    STAGE_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/parallel-workers-stage.XXXXXX")"
+    STAGE_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rota-stage.XXXXXX")"
     STAGE_ARCHIVE="$STAGE_TMP_DIR/stage.tar"
     cp "$SHARD_FILE" "$STAGE_TMP_DIR/commands.txt"
     cp "$SHARD_WORKER_SCRIPT" "$STAGE_TMP_DIR/mmshardworker.sh"
@@ -1460,7 +1460,7 @@ launch_shard_hosts() {
     run_with_timeout "$SSH_LAUNCH_TIMEOUT_SEC" ssh \
       "${SSH_COMMON_OPTS[@]}" \
       "$HOST" "set -e
-  state_parent=\"\$HOME/.parallel-workers/runs\"
+  state_parent=\"\$HOME/.rota/runs\"
   state_dir=\"\$state_parent/$RUN_TOKEN\"
   mkdir -p \"\$state_parent\"
   if ! mkdir \"\$state_dir\" 2>/dev/null; then
@@ -1522,7 +1522,7 @@ launch_shard_hosts() {
     run_with_timeout "$SSH_LAUNCH_TIMEOUT_SEC" ssh -n \
       "${SSH_COMMON_OPTS[@]}" \
       "$HOST" "set -e
-  state_dir=\"\$HOME/.parallel-workers/runs/$RUN_TOKEN\"
+  state_dir=\"\$HOME/.rota/runs/$RUN_TOKEN\"
   grep -q '^run_token=$RUN_TOKEN$' \"\$state_dir/staged.env\"
   if [ -f \"\$state_dir/ready.env\" ] && \\
      grep -q '^run_token=$RUN_TOKEN$' \"\$state_dir/ready.env\" && \\
@@ -1669,7 +1669,7 @@ start_shard_coordinator() {
   else
     wait "$COORDINATOR_PID" 2>/dev/null || true
     echo "Failed to start the shard progress coordinator; stopping released shard controllers." >&2
-    coordinator_host="${PARALLEL_WORKERS_COORDINATOR:-$(hostname)}"
+    coordinator_host="${ROTA_COORDINATOR:-$(hostname)}"
     HOST_ISSUES="${HOST_ISSUES}${coordinator_host} coordinator: failed to start\n"
     record_host_issue "$coordinator_host" coordinator 1 "shard progress coordinator exited during startup"
     stop_ready_hosts

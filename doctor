@@ -62,7 +62,7 @@ try:
         else:
             check("same_storage", False, "coordinator marker unavailable")
         try:
-            with tempfile.NamedTemporaryFile(prefix=".pw-doctor-", dir=directory) as f:
+            with tempfile.NamedTemporaryFile(prefix=".rota-doctor-", dir=directory) as f:
                 f.write(b"ok")
                 f.flush()
                 os.fsync(f.fileno())
@@ -102,7 +102,7 @@ def probe(host, action, root, directory, name, token, mode, timeout):
 def diagnose(inventory, directory, shards, timeout):
     hosts, root = inventory["hosts"], inventory["shared_root"]
     coordinator = next(h for h in hosts if h["id"] == inventory["coordinator"])
-    name = ".pw-doctor-" + secrets.token_hex(12)
+    name = ".rota-doctor-" + secrets.token_hex(12)
     token = secrets.token_hex(24)
     def run(host, action, value):
         mode = "shards" if shards and host["enabled"] else "adaptive"

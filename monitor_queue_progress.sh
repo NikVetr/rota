@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export PARALLEL_WORKERS_ROOT="${PARALLEL_WORKERS_ROOT:-}"
+export ROTA_ROOT="${ROTA_ROOT:-}"
 set -euo pipefail
 
-ROOT="${PARALLEL_WORKERS_ROOT}"
+ROOT="${ROTA_ROOT}"
 LIMIT=0
 RUNNING_WINDOW_SEC=86400
 ADAPTIVE_STATUS_STALE_SEC="${ADAPTIVE_STATUS_STALE_SEC:-60}"
@@ -11,11 +11,11 @@ OLDER_LIMIT=5
 BAR_WIDTH=12
 MAX_LABEL_LEN=160
 MAX_BATCH_SCAN=30
-CACHE_FILE="${TMPDIR:-/tmp}/parallel_workers_queue_progress_cache.tsv"
+CACHE_FILE="${TMPDIR:-/tmp}/rota_queue_progress_cache.tsv"
 TERM_COLS=0
 TERM_LINES=0
 SCROLLABLE=0
-HOSTS_FILE="${PARALLEL_WORKERS_HOSTS_FILE:-}"
+HOSTS_FILE="${ROTA_HOSTS_FILE:-}"
 HOSTS_OVERRIDE=""
 SSH_CONNECT_TIMEOUT_SEC=3
 REGISTRY_FILE=""
@@ -269,7 +269,7 @@ fi
 
 # Adaptive status names hosts by pool host_id; map them onto the hosts-file
 # order so adaptive rows print per-host counts exactly like fixed rows.
-ADAPTIVE_RESOURCES_FILE="${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}/resources.tsv"
+ADAPTIVE_RESOURCES_FILE="${ADAPTIVE_STATE_ROOT:-$ROOT/.rota/adaptive}/resources.tsv"
 host_ids=()
 for host in "${hosts[@]}"; do
   host_id=""
@@ -700,7 +700,7 @@ acquire_registry_lock() {
 }
 
 now_epoch="$(date +%s)"
-CANDIDATE_CACHE_FILE="${TMPDIR:-/tmp}/parallel_workers_queue_candidates_v8.txt"
+CANDIDATE_CACHE_FILE="${TMPDIR:-/tmp}/rota_queue_candidates_v8.txt"
 CANDIDATE_CACHE_TTL=60
 use_cached_candidates=0
 
@@ -774,12 +774,12 @@ collect_running_worker_tags
 
 if [ ! -f "$FAILURE_SCRIPT" ]; then
   echo "Missing $FAILURE_SCRIPT; failed adaptive jobs are not reported" >&2
-elif ! python3 "$FAILURE_SCRIPT" --state_root "${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}" \
+elif ! python3 "$FAILURE_SCRIPT" --state_root "${ADAPTIVE_STATE_ROOT:-$ROOT/.rota/adaptive}" \
     < "$tmp_all_candidates" > "$tmp_failed"; then
   : > "$tmp_failed"
 fi
 # One simulation per snapshot; all consumers keep the same ETA column.
-eta_state_root="${ADAPTIVE_STATE_ROOT:-$ROOT/.parallel-workers/adaptive}"
+eta_state_root="${ADAPTIVE_STATE_ROOT:-$ROOT/.rota/adaptive}"
 if [ -f "$eta_state_root/pool.env" ] && [ -f "$ROOT/adaptive_coordinator.py" ]; then
   eta_options=(--with-warnings)
   [ "$ETA_MODE" = pool ] || eta_options+=(--allocation-only)
