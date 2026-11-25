@@ -23,6 +23,7 @@ ADAPTIVE_ADMISSION="enabled"
 AFTER_QUEUES=()
 DEPENDENCIES='[]'
 RETRY_LOST_JOBS=0
+EARLY_ETA_SAMPLE=0
 WORKFLOW_ENABLED=0
 SHARD_PROGRESS_SYNC_SEC="${SHARD_PROGRESS_SYNC_SEC:-30}"
 SSH_CONNECT_TIMEOUT_SEC="${SSH_CONNECT_TIMEOUT_SEC:-8}"
@@ -58,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --after) AFTER_QUEUES+=("$2"); WORKFLOW_ENABLED=1; shift 2 ;;
         --retry_lost_jobs) RETRY_LOST_JOBS=1; WORKFLOW_ENABLED=1; shift ;;
+        --early_eta_sample) EARLY_ETA_SAMPLE=1; WORKFLOW_ENABLED=1; shift ;;
         --model_dir)
             MODEL_DIR="$2"
             shift 2
@@ -144,7 +146,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$WORKFLOW_ENABLED" -eq 1 ] && [ "$EXECUTION_MODE" != adaptive-shared-queue ]; then
-  echo "Error: --after and --retry_lost_jobs require adaptive mode." >&2
+  echo "Error: --after, --retry_lost_jobs and --early_eta_sample require adaptive mode." >&2
   exit 2
 fi
 
@@ -668,6 +670,10 @@ if [ "$EXECUTION_MODE" = "adaptive-shared-queue" ]; then
       bash "$(dirname "$0")/adaptive_scheduler.sh" verify-memory-calibration || exit 1
   fi
   if [ "$WORKFLOW_ENABLED" -eq 1 ]; then
+    if [ "$EARLY_ETA_SAMPLE" -eq 1 ] && [ "$(state_value "$COORDINATOR_READY_FILE" early_eta_sample_version)" != 1 ]; then
+      echo "Error: --early_eta_sample requires a coordinator with early ETA sampling support." >&2
+      exit 1
+    fi
     [ "$(state_value "$ADAPTIVE_POOL_MARKER" workflow_version)" = 1 ] && \
       [ "$(state_value "$COORDINATOR_READY_FILE" workflow_version)" = 1 ] || {
         echo "Error: workflow options require a compatible fresh pool." >&2; exit 1;
@@ -984,6 +990,7 @@ register_adaptive_queue() (
     if [ "$WORKFLOW_ENABLED" -eq 1 ]; then
       echo "dependencies=$DEPENDENCIES"
       echo "retry_lost_jobs=$RETRY_LOST_JOBS"
+      [ "$EARLY_ETA_SAMPLE" -eq 0 ] || echo "early_eta_sample=1"
     fi
   } > "$tmp"
   chmod 444 "$tmp"

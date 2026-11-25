@@ -109,6 +109,13 @@ For future launches the monitor also includes the typical gap between jobs
 when it observes at least five consecutive same-host refills for that queue.
 Very short jobs may spend as much time waiting for the next launch as computing.
 
+For an early estimate, add `--early_eta_sample` to an adaptive submission
+with at least 20 jobs. Its first two ordinary jobs can take an eligible free
+slot ahead of their queue's priority, one at a time. The pool allows one such
+slot across all opted-in queues. Dependencies, pauses, host restrictions and
+resource limits still apply. Jobs started at normal priority count toward
+the two, and the first successful completion can supply an ETA.
+
 A `?` beside a dashboard ETA or a timing note in Agent Bar flags a change in
 the job mix or a running job that has outlasted the sample. The estimate still
 assumes average remaining jobs. The JSON report includes the mean runtime,

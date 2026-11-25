@@ -68,6 +68,9 @@ def resolve_dependencies(state: Path, references: list[str]) -> list[dict[str, s
 
 
 def policy(resources: dict[str, str]) -> tuple[list[dict[str, str]], bool]:
+    if "early_eta_sample" in resources and (resources.get("schema_version") != "2"
+                                             or resources["early_eta_sample"] not in {"0", "1"}):
+        raise ValueError("invalid early ETA sampling policy")
     if resources.get("schema_version") == "1":
         if {"dependencies", "retry_lost_jobs"} & resources.keys():
             raise ValueError("workflow options require resource schema 2")
@@ -259,11 +262,14 @@ def main() -> int:
         elif args.command == "submit-chain":
             submit_chain(args.scheduler, args.manifest)
         else:
-            dependencies, retry_lost = policy(read_env(args.resources))
+            resources = read_env(args.resources)
+            dependencies, retry_lost = policy(resources)
             for dependency in retry_dependencies(dependencies, args.replace_dependency):
                 print("--after\n" + dependency["batch_dir"])
             if retry_lost:
                 print("--retry_lost_jobs")
+            if resources.get("early_eta_sample") == "1":
+                print("--early_eta_sample")
     except (OSError, ValueError, KeyError) as error:
         print(f"adaptive workflow: {error}", file=sys.stderr)
         return 1

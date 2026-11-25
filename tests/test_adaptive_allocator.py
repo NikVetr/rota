@@ -76,6 +76,33 @@ def snapshot(hosts: list[dict], queues: list[dict], **values: object) -> dict:
 
 
 class AllocatorTests(unittest.TestCase):
+    def test_one_early_slot_respects_pending_grants_and_start_pacing(self):
+        qs = [queue("urgent", priority=90), queue("sample", early_sample_remaining=2),
+              queue("second", early_sample_remaining=2)]
+        data = snapshot([host("h", cpu=3)], qs)
+        plan = allocate(data)
+        self.assertEqual(plan["targets"]["h"], {"urgent": 2, "sample": 1, "second": 0})
+        profiles = {q["queue_id"]: q for q in qs}
+        grants = MODULE._start_grants(plan, profiles, {"h"})
+        states = {"h": {"generation": 1, "start_pacing": {"slots": 0, "next_epoch": 99, "cursor": ""}}}
+        MODULE._pace_start_grants(plan, grants, profiles, states, "pool", 100, 4)
+        self.assertEqual(grants["h"], {"urgent": 0, "sample": 1, "second": 0})
+        data["prior_targets"] = [{"host_id": "h", "queue_id": "sample", "target_running": 1}]
+        self.assertNotIn("early_sample", allocate(data))
+        data["prior_targets"] = []
+        qs[1]["early_sample_remaining"] = 0
+        self.assertEqual(allocate(data)["early_sample"]["queue_id"], "second")
+
+    def test_early_sample_needs_an_eligible_free_slot(self):
+        for h, opts in [(host("h", drain_only=True), {}), (host("h", blocked_queues=["sample"]), {}),
+                        (host("h"), {"admission": "paused"}), (host("h"), {"host_priorities": {"h": "off"}}),
+                        (host("h", live_memory_mib=512), {}), (host("h"), {"shared_io_units_per_job": 1})]:
+            with self.subTest(h=h, opts=opts):
+                plan = allocate(snapshot([h], [queue("sample", early_sample_remaining=1, **opts)],
+                                         shared_io_capacity=0, allow_unschedulable_queues=True))
+                self.assertNotIn("early_sample", plan)
+                self.assertEqual(plan["targets"]["h"]["sample"], 0)
+
     def test_failure_hold_is_per_host_and_queue(self) -> None:
         plan = allocate(snapshot(
             [host("h1", cpu=2, blocked_queues=["bad"]), host("h2", cpu=2)],
@@ -1238,19 +1265,32 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertTrue((self.state / "queues" / f"{self.queue_id}.env").exists())
         self.assertTrue((self.batch / "claims/job_job_2.claim").exists())
 
-    def register_queue(self, queue_id: str, shared_io: int = 0) -> Path:
+    def test_only_first_two_claims_of_opted_in_large_queues_qualify(self):
+        for size, opt_in in ((19, True), (20, True), (20, False)):
+            q = f"q-{size}-{int(opt_in)}"
+            batch = self.register_queue(q, size=size, early_sample=opt_in)
+            claims = batch / "claims"
+            claims.mkdir()
+            for claimed in range(4):
+                _, info = MODULE._load_queue(self.state / "queues" / f"{q}.env", self.pool_id, "ACTIVE", None)
+                expected = 2 - claimed if size >= 20 and opt_in and claimed <= 2 else None
+                self.assertEqual(info["allocator"].get("early_sample_remaining"), expected)
+                (claims / f"job_job_{claimed + 1}.claim").mkdir()
+
+    def register_queue(self, queue_id: str, shared_io: int = 0, size: int = 2, early_sample: bool = False) -> Path:
         batch = self.root / f"{queue_id}-batch"
         (batch / "adaptive").mkdir(parents=True)
         (batch / "done").mkdir()
-        (batch / "run_meta.env").write_text("total_jobs=2\n", encoding="utf-8")
+        (batch / "run_meta.env").write_text(f"total_jobs={size}\n", encoding="utf-8")
         original = self.root / f"{queue_id}-original.txt"
         editable = batch / "queue-edit.txt"
-        original.write_text("job_1 true\njob_2 true\n", encoding="utf-8")
+        original.write_text("".join(f"job_{i+1} true\n" for i in range(size)), encoding="utf-8")
         editable.write_text(original.read_text(encoding="utf-8"), encoding="utf-8")
         resources = batch / "adaptive" / "resources.env"
         control = batch / "adaptive" / "control.env"
         resources.write_text(
-            f"schema_version=1\nqueue_id={queue_id}\ncpu_units_per_job=1\n"
+            ("schema_version=2\ndependencies=[]\nretry_lost_jobs=0\nearly_eta_sample=1\n"
+             if early_sample else "schema_version=1\n") + f"queue_id={queue_id}\ncpu_units_per_job=1\n"
             f"memory_mib_per_job=256\nshared_io_units_per_job={shared_io}\n",
             encoding="utf-8",
         )

@@ -27,6 +27,15 @@ def host(name="node", cpu=2, mem=1000, **extra):
 
 
 class PoolEtaTests(unittest.TestCase):
+    def test_two_early_jobs_then_normal_priority_after_slot_release(self):
+        sample = queue(20, 5)
+        jobs = {"sample": sample, "high": queue(9, 10, priority=90)}
+        running = [Slot("node", "high", 30, 100)]
+        for remaining in (0, 1, 2):
+            sample.profile["early_sample_remaining"] = remaining
+            self.assertEqual(forecast([host(cpu=1)], jobs, running, 1, allocate),
+                             {"high": 120 + 5 * remaining, "sample": 220})
+
     def test_equal_peers_finish_in_ten_and_thirty_five_minutes(self):
         jobs = {"A": queue(9), "B": queue(59)}
         running = [Slot("node", q, 60, 100) for q in jobs]

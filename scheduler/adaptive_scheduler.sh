@@ -73,6 +73,7 @@ Submit options:
   --memory_calibration_jobs <0|20..50>  Opt in after successful jobs (default 0)
   --after <batch-dir|queue-id|unique-run-name>  Hold until successful completion; repeat for AND
   --retry_lost_jobs                Retry audited node-loss tail jobs once (default off)
+  --early_eta_sample               Let the first two jobs in a queue of 20+ sample free slots early
   --memory_calibration_seconds <0|600..86400>  Opt in for long jobs (default 0)
   --memory_min_mib_per_job <MiB>       Calibration floor (default 64 when enabled)
   --recover_inactive                 Recover an audited stale queue guard
@@ -1303,7 +1304,7 @@ submit_queue() {
     esac
     case "$1" in
       --after) workflow_args+=(--after "$2"); shift 2 ;;
-      --retry_lost_jobs) workflow_args+=(--retry_lost_jobs); shift ;;
+      --retry_lost_jobs|--early_eta_sample) workflow_args+=("$1"); shift ;;
       --model_dir) model_dir="$2"; shift 2 ;;
       --queue) queue="$2"; shift 2 ;;
       --run_name) run_name="$2"; shift 2 ;;

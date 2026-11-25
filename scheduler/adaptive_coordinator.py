@@ -195,6 +195,11 @@ def _normalize(snapshot: dict[str, Any]) -> tuple[
             "pending": _integer(raw, "pending_lines", 0),
             "admission": admission,
         }
+        if "early_sample_remaining" in raw:
+            remaining = _integer(raw, "early_sample_remaining", 0)
+            if remaining > 2:
+                raise SnapshotError("early_sample_remaining must be at most two")
+            queues[queue_id]["early_sample_remaining"] = remaining
     observed: dict[tuple[str, str], int] = {}
     observed_memory: dict[tuple[str, str], int] = {}
     for raw in _records(snapshot, "reservations"):
@@ -372,6 +377,32 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
             result.append((dominant, host_id, additional))
         return sorted(result)
 
+    def assign(queue_id: str, host_id: str, additional: bool) -> None:
+        nonlocal future_io, current_io
+        profile = queues[queue_id]
+        targets[host_id][queue_id] += 1
+        future_cpu[host_id] += profile["cpu"]
+        future_memory[host_id] += profile["memory"]
+        future_io += profile["io"]
+        if additional:
+            current_cpu[host_id] += profile["cpu"]
+            current_memory[host_id] += profile["memory"]
+            current_io += profile["io"]
+
+    # One early slot across the pool. An unacknowledged grant also owns
+    # that slot. Normal priority allocation can still use other free slots.
+    sample = None
+    sampling = [q for q in queue_ids if "early_sample_remaining" in queues[q]]
+    if not any(queue_envelope[q] for q in sampling):
+        for q in sampling:
+            if queues[q]["early_sample_remaining"] and demand_limit(q):
+                sample_hosts = candidates(q)
+                if sample_hosts:
+                    _, host_id, additional = sample_hosts[0]
+                    assign(q, host_id, additional)
+                    sample = {"host_id": host_id, "queue_id": q}
+                    break
+
     for priority in priorities:
         peers = sorted(
             queue_id for queue_id in queue_ids
@@ -391,15 +422,8 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
                 if not choices:
                     continue
                 _, host_id, additional = choices[0]
-                targets[host_id][queue_id] += 1
-                profile = queues[queue_id]
-                future_cpu[host_id] += profile["cpu"]
-                future_memory[host_id] += profile["memory"]
-                future_io += profile["io"]
+                assign(queue_id, host_id, additional)
                 if additional:
-                    current_cpu[host_id] += profile["cpu"]
-                    current_memory[host_id] += profile["memory"]
-                    current_io += profile["io"]
                     cursor[str(priority)] = queue_id
                 progress = True
             if not progress:
@@ -474,6 +498,7 @@ def allocate(snapshot: dict[str, Any]) -> dict[str, Any]:
         },
         "drain_reservations": drain_reservations,
         "limits": limits,
+        **({"early_sample": sample} if sample else {}),
         "cursor": {key: cursor[key] for key in sorted(cursor, key=int)},
     }
 
@@ -555,6 +580,12 @@ def _pace_start_grants(
             )
             for q in host_grants
         }
+        sample = plan.get("early_sample")
+        sample_queue = sample["queue_id"] if sample and sample["host_id"] == host_id else ""
+        sample_grant = int(bool(allowance and sample_queue and host_grants[sample_queue]))
+        if sample_grant:
+            host_grants[sample_queue] -= 1
+            allowance -= 1
         priorities = sorted({p for p in levels.values() if p is not None}, reverse=True)
         for priority in priorities:
             peers = sorted(q for q in host_grants if levels[q] == priority)
@@ -574,6 +605,8 @@ def _pace_start_grants(
                         remaining[q] -= 1
                         allowance -= 1
                         cursor = q
+        if sample_grant:
+            host_grants[sample_queue] += 1
         issued = occupied + sum(host_grants.values())
         if issued > slots:
             slots = issued
@@ -1006,6 +1039,8 @@ def _load_queue(
         "pending_lines": pending,
         "admission": "enabled" if effective_admission == "enabled" and not hold else "paused",
     }
+    if resources.get("early_eta_sample") == "1" and len(job_ids) >= 20 and len(job_ids) - pending <= 2:
+        profile["early_sample_remaining"] = 2 - (len(job_ids) - pending)
     return queue_id, {
         "allocator": profile,
         "dependencies": dependencies,
@@ -1767,6 +1802,7 @@ class Coordinator:
             "memory_calibration_version=1",
             "workflow_version=1",
             "host_priority_version=1",
+            "early_eta_sample_version=1",
             f"updated_epoch={int(time.time())}", "",
         ])
         _atomic_text(self.state_root / "coordinator.ready", ready, 0o644)
@@ -2028,6 +2064,20 @@ class Coordinator:
             }
             for queue_id, queue in accounting.items()
         }
+        # The agent poll can span a short job's entire lifetime. Recheck the
+        # two immutable claim IDs after polling before granting an early slot.
+        for q, profile in allocator_queues.items():
+            if profile.get("early_sample_remaining", 0):
+                claims = Path(queues[q]["registration"]["log_dir"]) / "claims"
+                try:
+                    seen = set(os.listdir(claims))
+                except OSError as error:
+                    problems[q] = f"cannot verify early timing claims: {error}"
+                    profile["admission"] = "paused"
+                else:
+                    profile["early_sample_remaining"] = sum(
+                        f"job_{job}.claim" not in seen for job in queues[q]["job_ids"][:2]
+                    )
         plan = allocate({
             "schema_version": 1,
             # Without a verified cost, the missing queue may still consume any

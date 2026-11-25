@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -139,6 +140,17 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "itself"):
             MODULE.policy({"schema_version": "2", "queue_id": "first", "retry_lost_jobs": "1",
                            "dependencies": json.dumps([self.dependency])})
+
+    def test_retry_preserves_the_early_sample_opt_in(self):
+        resources = self.root / "resources.env"
+        env(resources, schema_version=2, queue_id="first", retry_lost_jobs=0, dependencies="[]", early_eta_sample=1)
+        script = MODULE.__file__
+        assert script is not None
+        args = subprocess.check_output([sys.executable, script, "retry-args", "--resources", resources],
+                                       text=True).splitlines()
+        self.assertEqual(args, ["--early_eta_sample"])
+        with self.assertRaisesRegex(ValueError, "sampling policy"):
+            MODULE.policy({"schema_version": "1", "early_eta_sample": "1"})
 
     def prepare_tail(self):
         queue = self.batch / "queue.txt"

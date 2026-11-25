@@ -38,7 +38,7 @@ class Slot:
     memory: int
 
 
-def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity):
+def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity, early_waiters=()):
     """Find occupied slots that a waiting peer could take on its next turn."""
     totals = Counter(s.queue for s in slots)
     waiting = {}
@@ -74,7 +74,7 @@ def contested_slots(hosts, queues, live, pending, completed, slots, targets, io_
             if not target:
                 continue
             priority = queues[q].profile["host_priorities"].get(h, queues[q].profile["schedule_priority"])
-            if priority != "off" and any(other != q and (value > priority or
+            if priority != "off" and any(other != q and (other in early_waiters or value > priority or
                     (value == priority and totals[other] < totals[q])) for other, value in levels.items()):
                 contested.add((h, q))
     # A refill can consume the I/O that a peer on another host needs.
@@ -140,6 +140,8 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
     # Unknown runtimes occupy their placement indefinitely. Other hosts/queues
     # can still yield a forecast without guessing when those workers will free up.
     pending = {q: item.pending for q, item in queues.items()}
+    sample_queues = {q: item.profile["early_sample_remaining"] for q, item in queues.items()
+                     if "early_sample_remaining" in item.profile}
     live = set(queues)
     completed = set()
     finish = {}
@@ -164,6 +166,15 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
             profiles = [dict(queues[q].profile, queue_id=q, pending_lines=pending[q],
                              admission="paused" if queues[q].depends - completed else queues[q].profile["admission"])
                         for q in sorted(live)]
+            if sample_queues:
+                for profile in profiles:
+                    q = profile["queue_id"]
+                    if q in sample_queues:
+                        remaining = sample_queues[q] - (queues[q].pending - pending[q])
+                        if remaining >= 0:
+                            profile["early_sample_remaining"] = remaining
+                        else:
+                            del profile["early_sample_remaining"]
             plan = allocate({"schema_version": 1, "hosts": hosts, "queues": profiles,
                              "shared_io_capacity": io_capacity, "allow_unschedulable_queues": True,
                              "cursor": cursor or {}, "reservations": [
@@ -177,8 +188,18 @@ def forecast(hosts, queues, slots, io_capacity, allocate, cursor=None, cpu_deadl
                         slots.append(Slot(h, q, now + queues[q].duration(h), queues[q].profile["memory_mib_per_job"]))
                     pending[q] -= add
                     counts[h, q] += add
-            contested = contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity)
-            if contested:
+            # Reallocate on the next sample finish, or on the next release that
+            # could let a waiting sample start. Never bulk-refill across it.
+            sampling = {q: budget - (queues[q].pending - pending[q]) for q, budget in sample_queues.items()
+                        if q in live and queues[q].pending - pending[q] <= budget}
+            holders = {(s.host, s.queue) for s in slots if s.queue in sampling} if sampling else set()
+            waiters = {q for q, remaining in sampling.items() if remaining and
+                       queues[q].profile["admission"] == "enabled" and not queues[q].depends - completed}
+            contested = contested_slots(hosts, queues, live, pending, completed, slots, targets, io_capacity,
+                                        () if holders else waiters)
+            if plan.get("early_sample") or waiters:
+                contested.update(holders)
+            if contested and not (holders and (waiters or plan.get("early_sample"))):
                 now = skip_repeated_cycle(cycles, cursor, live, pending, slots, now)
         if not slots:
             break
@@ -283,6 +304,8 @@ def queue_snapshot(state_root, pool, now, lease, hosts, charges, dependency_hold
         total = int(meta["total_jobs"])
         times = sample_jobs(batch, now, pool["pool_id"])
         pending = max(0, total - times.claimed)
+        if res.get("early_eta_sample") == "1" and total >= 20 and times.claimed <= 2:
+            profile["early_sample_remaining"] = 2 - times.claimed
         if not pending and not count:
             continue
         typical = mean(times.durations) if times.durations else math.inf

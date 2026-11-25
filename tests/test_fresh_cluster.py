@@ -61,9 +61,10 @@ raise SystemExit(subprocess.run(["bash", "-c", args[1]], env=os.environ).returnc
                                                      env=env, text=True).strip())
                 submitted = command("submit", "--model_dir", str(model), "--queue", "jobs.txt",
                                     "--project", "first-job", "--run_name", "squares",
-                                    "--cpu_units_per_job", "1", "--memory_mib_per_job", "128")
+                                    "--cpu_units_per_job", "1", "--memory_mib_per_job", "128", "--early_eta_sample")
                 batch = Path(next(line.split("=", 1)[1] for line in submitted.splitlines()
                                   if line.startswith("batch_dir=")))
+                self.assertIn("early_eta_sample=1\n", (batch / "adaptive/resources.env").read_text())
                 deadline = time.monotonic() + 35
                 markers = [batch / f"done/job_square{n}.done" for n in (3, 7)]
                 while time.monotonic() < deadline and not all(p.exists() for p in markers):
