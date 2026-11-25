@@ -4,7 +4,7 @@ ROTA is a job scheduler that runs independent tasks on Mac and Linux machines th
 It divides the machines' CPU, memory and shared-drive I/O among queues by priority, and it
 needs no root access, database or containers.
 
-![Three queues share four hosts. Each square is one CPU unit held by a running job; a higher-priority queue fills slots as other jobs finish.](docs/figures/loop-pool-overview.gif)
+![Three queues share four hosts. Each square is one CPU unit held by a running job; a higher-priority queue fills slots as other jobs finish.](docs/figures/loop-pool-overview.webp)
 
 Suppose you have two analyses to run and want the results of one before the other.
 Give that queue the higher priority. As jobs finish, the adaptive pool gives it
@@ -26,7 +26,7 @@ For clusters with different requirements, see the [scheduler comparison](docs/co
 
 | Priorities | Leases | Forecasts |
 | --- | --- | --- |
-| ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.gif) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.gif) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.gif) |
+| ![Queue B arrives at equal priority and gets an even split as A's jobs finish; queue C at priority 90 then takes every slot that frees up, without stopping any job.](docs/figures/loop-priorities.webp) | ![An unreachable host's lease expires, so it starts nothing new while its running jobs continue and stay charged; a host whose daemon died is restarted after one lease period.](docs/figures/loop-leases.webp) | ![With fixed allocation, queue B would end at 60 minutes. The pool forecast replays the allocator: B gets both workers once A finishes, ending at 35.](docs/figures/loop-pool-forecast.webp) |
 | Queues at equal priority share slots. A higher priority takes the next eligible slot. | When a host’s lease expires, its running jobs continue. New starts wait for contact to resume. | A finishes at minute 10. B then gets both workers and finishes at minute 35. |
 
 <p align="center"><a href="https://youtu.be/NRnLCDgYsQw"><img src="docs/figures/explainer-thumbnail.jpg" width="100%" alt="How the ROTA scheduler works: a 17-minute narrated video"></a></p>
