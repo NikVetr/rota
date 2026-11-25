@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(1, str(ROOT / "monitor"))
 from test_cluster_status_collector import TSV
 import monitor_sample as sample
 
@@ -91,7 +92,7 @@ class SnapshotDashboardTests(unittest.TestCase):
         env.update(ROTA_ROOT="/srv/cluster", PATH=f"{binary}{os.pathsep}{env['PATH']}", ROTA_HOSTS_FILE=str(self.base / "hosts.txt"),
                    ROTA_CLUSTER_SNAPSHOT=str(self.base / "cluster-status.json"),
                    ROTA_QUEUE_SNAPSHOT=str(self.base / "queue-progress.tsv"))
-        result = subprocess.run(["bash", str(ROOT / "start_tmux_monitoring.sh"), "--session", "mmm-test"],
+        result = subprocess.run(["bash", str(ROOT / "monitor" / "start_tmux_monitoring.sh"), "--session", "mmm-test"],
                                 env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         deadline, panes = time.monotonic() + 20, {}
@@ -124,11 +125,11 @@ class SnapshotDashboardTests(unittest.TestCase):
                          (self.base / "forbidden.log").read_text() if (self.base / "forbidden.log").exists() else "")
 
     def test_hosts_override_requires_direct_mode(self):
-        result = subprocess.run(["bash", str(ROOT / "start_tmux_monitoring.sh"), "--hosts", "u@a"],
+        result = subprocess.run(["bash", str(ROOT / "monitor" / "start_tmux_monitoring.sh"), "--hosts", "u@a"],
                                 capture_output=True, text=True, timeout=30, env=dict(os.environ, ROTA_ROOT="/srv/cluster"))
         self.assertEqual(result.returncode, 2)
         self.assertIn("--hosts requires --direct", result.stderr)
-        remote = (ROOT / "start_tmux_monitoring_remote.sh").read_text()
+        remote = (ROOT / "monitor" / "start_tmux_monitoring_remote.sh").read_text()
         self.assertEqual(remote.count("start_tmux_monitoring.sh\" --direct"), 2)
 
 

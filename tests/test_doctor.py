@@ -33,7 +33,7 @@ sys.exit(subprocess.call(["sh", "-c", command]))
                 inventory.write_text(json.dumps({"shared_root": str(shared), "coordinator": "store",
                     "hosts": [{"id": node, "ssh": node, "cpu_units": 1, "memory_mib": 512,
                                "enabled": node == "store" or enabled} for node in ("store", other)]}))
-                proc = subprocess.run([str(ROOT / "doctor"), str(inventory), "--json"], env=env,
+                proc = subprocess.run([str(ROOT / "setup" / "doctor"), str(inventory), "--json"], env=env,
                                       capture_output=True, text=True, timeout=15)
                 self.assertEqual(list(shared.iterdir()), [])
                 self.assertEqual(list((base/"other").iterdir()), [])

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Install the cluster status collector as a systemd --user service on the
 # Linux dashboard host. Remote hosts must already have the monitor
-# helpers: run ./sync_rota_monitoring.sh first.
+# helpers: run ./setup/sync_rota_monitoring.sh first.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNIT=rota-collector.service
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -37,7 +37,7 @@ if ! [[ "$REPO_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
   echo "Repository path is unsuitable for a unit file: $REPO_DIR" >&2
   exit 1
 fi
-unit_text="$(sed "s|@REPO_DIR@|$REPO_DIR|g" "$REPO_DIR/systemd/$UNIT")"
+unit_text="$(sed "s|@REPO_DIR@|$REPO_DIR|g" "$REPO_DIR/admin/systemd/$UNIT")"
 
 case "$ACTION" in
   print)
@@ -57,7 +57,7 @@ case "$ACTION" in
 from pathlib import Path
 for filename in sys.argv[1:]:
     compile(Path(filename).read_bytes(), filename, "exec")' \
-      "$REPO_DIR/cluster_status_collector.py" "$REPO_DIR/cluster_config.py" "$REPO_DIR/rota_control.py"
+      "$REPO_DIR/monitor/cluster_status_collector.py" "$REPO_DIR/setup/cluster_config.py" "$REPO_DIR/control/rota_control.py"
     bash -n "$REPO_DIR/rota"
     if [ -n "${ROTA_CONFIG_DIR:-}" ]; then
       mkdir -p "$SETTINGS_DIR"

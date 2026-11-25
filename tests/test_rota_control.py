@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, next(ROOT.glob(f"*/{name}.py")))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -134,7 +134,7 @@ class ApplyTests(unittest.TestCase):
         request = {"protocol": 1, "request_id": "r1", "source": "test", **request}
         env = dict(os.environ, ROTA_ROOT="/srv/cluster", ROTA_COORDINATOR="fixture", ROTA_CONTROL_SSH=str(self.root / "ssh"), FAKE_STATE=str(self.root / "state.json"),
                    FAKE_LOG=str(self.log), FAKE_MODE=mode)
-        result = subprocess.run([sys.executable, str(ROOT / "rota_control.py"), "apply"], input=json.dumps(request),
+        result = subprocess.run([sys.executable, str(ROOT / "control" / "rota_control.py"), "apply"], input=json.dumps(request),
                                 capture_output=True, text=True, env=env, timeout=60)
         commands = self.log.read_text().splitlines() if self.log.exists() else []
         self.log.unlink(missing_ok=True)
@@ -202,7 +202,7 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual((status, result["error"]["code"]), (1, "unreachable"))
         status, result, _ = self.apply(request, mode="refuse")
         self.assertEqual((status, result["error"]["code"]), (1, "not_supported"))
-        result = subprocess.run([sys.executable, str(ROOT / "rota_control.py"), "apply"], input="{not json",
+        result = subprocess.run([sys.executable, str(ROOT / "control" / "rota_control.py"), "apply"], input="{not json",
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertFalse(json.loads(result.stdout)["ok"])

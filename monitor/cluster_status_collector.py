@@ -648,6 +648,7 @@ class Collector:
 
 
 def main():
+    sys.path.append(str(SCRIPT_DIR.parent / "setup"))  # the inventory renderer, in a checkout
     from cluster_config import load_monitor_environment
     load_monitor_environment()
     state = default_state_dir()

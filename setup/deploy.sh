@@ -49,10 +49,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -n "$COORDINATOR" ] || { echo "Source the inventory environment or pass --coordinator." >&2; exit 2; }
 SNAPSHOT_DIR="$REPO_DIR/scheduler"
-MONITOR_SYNC="$REPO_DIR/sync_rota_monitoring.sh"
+MONITOR_SYNC="$REPO_DIR/setup/sync_rota_monitoring.sh"
 
 if [ ! -f "$HOSTS_FILE" ]; then
   echo "Hosts file not found: $HOSTS_FILE" >&2

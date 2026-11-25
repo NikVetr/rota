@@ -71,12 +71,12 @@ flowchart TD
    your SSH configuration. Optional settings turn on backfill, GPU units, and
    holding or suspending work while a machine's owner is at the keyboard
    ([opt-in features](docs/operations.md#opt-in-host-and-queue-features)).
-3. From the coordinator, run `./doctor cluster.local.json`. It checks the SSH
+3. From the coordinator, run `./rota doctor cluster.local.json`. It checks the SSH
    routes and tools, tests write access, and verifies that each host can read a
    marker the coordinator wrote. Once it passes, load the configuration in this shell.
 
    ```bash
-   env_file=$(python3 cluster_config.py cluster.local.json --render)
+   env_file=$(./rota config cluster.local.json --render)
    source "$env_file"
    ```
 
@@ -87,8 +87,8 @@ flowchart TD
 4. From the coordinator checkout, deploy to an idle cluster and start its pool:
 
    ```bash
-   ./deploy.sh --scheduler-only
-   ./sync_rota_monitoring.sh
+   ./rota deploy --scheduler-only
+   ./setup/sync_rota_monitoring.sh
    "$ROTA_ROOT/adaptive_scheduler.sh" pool-start
    ```
 
@@ -108,10 +108,10 @@ into `~/.local/bin`. On other machines, use `ln -s "$PWD/rota" ~/.local/bin/rota
 ### Open the dashboard
 
 On the dashboard host, source the generated environment and run
-`./start_monitoring.sh --direct` from its checkout to sample the hosts over SSH.
+`./rota monitor --direct` from its checkout to sample the hosts over SSH.
 For the shared snapshot used by the CLI and Agent Bar on Linux, run
 `./admin/install_cluster_status_collector.sh` from that configured shell, then
-`./start_monitoring.sh`. The installer keeps a local copy of the inventory
+`./rota monitor`. The installer keeps a local copy of the inventory
 settings for the service and `rota control`. Rerun the installer after selecting
 a different inventory. [Monitor and recover](docs/operations.md#monitor-and-recover)
 

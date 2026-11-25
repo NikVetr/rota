@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "failure_events", Path(__file__).resolve().parents[1] / "failure_events.py")
+    "failure_events", Path(__file__).resolve().parents[1] / "monitor" / "failure_events.py")
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 FailureEvents = _module.FailureEvents

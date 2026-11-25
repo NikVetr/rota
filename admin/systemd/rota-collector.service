@@ -5,7 +5,7 @@ Documentation=file://@REPO_DIR@/docs/operations.md
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 @REPO_DIR@/cluster_status_collector.py
+ExecStart=/usr/bin/python3 @REPO_DIR@/monitor/cluster_status_collector.py
 Restart=always
 RestartSec=10
 Nice=10

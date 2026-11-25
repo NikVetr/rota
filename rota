@@ -20,7 +20,7 @@ From a checkout:
   config ...               Render or check the cluster inventory (cluster_config.py)
   doctor                   Check this host's setup
   monitor ...              Start the tmux dashboard (start_monitoring.sh)
-  deploy ...               Deploy the scheduler to the shared root (deploy.sh)
+  deploy ...               Deploy the scheduler to the shared root (setup/deploy.sh)
 
 Through the shared root (${ROOT:-\$ROTA_ROOT, unset: source the inventory environment}):
   start ...                Launch a queue (start_workers.sh)
@@ -46,11 +46,11 @@ command="${1:-help}"
 case "$command" in
   help|-h|--help) usage ;;
   help-scheduler) shared adaptive_scheduler.sh; exec "$ROOT/adaptive_scheduler.sh" --help ;;
-  control) checkout rota_control.py control; exec python3 "$HERE/rota_control.py" "$@" ;;
-  config) checkout cluster_config.py config; exec python3 "$HERE/cluster_config.py" "$@" ;;
-  doctor) checkout doctor doctor; exec "$HERE/doctor" "$@" ;;
-  monitor) checkout start_monitoring.sh monitor; exec "$HERE/start_monitoring.sh" "$@" ;;
-  deploy) checkout deploy.sh deploy; exec "$HERE/deploy.sh" "$@" ;;
+  control) checkout control/rota_control.py control; exec python3 "$HERE/control/rota_control.py" "$@" ;;
+  config) checkout setup/cluster_config.py config; exec python3 "$HERE/setup/cluster_config.py" "$@" ;;
+  doctor) checkout setup/doctor doctor; exec "$HERE/setup/doctor" "$@" ;;
+  monitor) checkout monitor/start_monitoring.sh monitor; exec "$HERE/monitor/start_monitoring.sh" "$@" ;;
+  deploy) checkout setup/deploy.sh deploy; exec "$HERE/setup/deploy.sh" "$@" ;;
   start) shared start_workers.sh; exec "$ROOT/start_workers.sh" "$@" ;;
   kill) shared kill_workers.sh; exec "$ROOT/kill_workers.sh" "$@" ;;
   reconcile) shared reconcile_queue_batch.sh; exec "$ROOT/reconcile_queue_batch.sh" "$@" ;;

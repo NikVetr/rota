@@ -14,7 +14,7 @@ import termios
 import time
 import unittest
 
-spec = importlib.util.spec_from_file_location("cpu", Path(__file__).resolve().parents[1] / "monitor_cpu.py")
+spec = importlib.util.spec_from_file_location("cpu", Path(__file__).resolve().parents[1] / "monitor" / "monitor_cpu.py")
 cpu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cpu)
 

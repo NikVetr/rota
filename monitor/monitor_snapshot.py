@@ -23,7 +23,7 @@ SERVICE = "rota-collector.service"
 # The collector writes at least every 5 s; three missed heartbeats mean it stopped.
 STALE_SEC = 15
 START_HINT = (f"start it with: systemctl --user start {SERVICE} "
-              "(install: admin/install_cluster_status_collector.sh), or run ./start_monitoring.sh --direct")
+              "(install: admin/install_cluster_status_collector.sh), or run rota monitor --direct")
 MAC_PRESSURE = {level: word for word, level in monitor_sample.PRESSURE.items()}
 
 

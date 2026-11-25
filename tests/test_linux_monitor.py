@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "monitor"))
 import monitor_linux as linux
 import monitor_cpu as cpu
 
@@ -72,7 +72,7 @@ class LinuxMonitorTests(unittest.TestCase):
     def test_native_io_panel_produces_a_frame(self):
         with tempfile.TemporaryDirectory() as directory:
             env = dict(os.environ, TMPDIR=directory, ADAPTIVE_STATE_ROOT=directory)
-            process = subprocess.Popen(["bash", str(ROOT / "monitor_cluster_io.sh"),
+            process = subprocess.Popen(["bash", str(ROOT / "monitor" / "monitor_cluster_io.sh"),
                                         "--root", directory, "--interface", "lo", "--refresh_sec", "2"],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        text=True, start_new_session=True)

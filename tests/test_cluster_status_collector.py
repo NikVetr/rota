@@ -16,7 +16,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "monitor"))
+sys.path.insert(1, str(ROOT / "setup"))
 import cluster_status_collector as collector
 
 # Columns as monitor_queue_progress.sh --data_only prints them (see render_queue_progress.sh).
@@ -105,7 +106,7 @@ class HostsTests(unittest.TestCase):
         self.assertTrue(collector.is_local("localhost"))
         self.assertFalse(collector.is_local("user@192.0.2.1"))
         local = collector.stream_command("u@127.0.0.1", True, "monitor_sample.py", ["stream"])
-        self.assertEqual(local, [sys.executable, str(ROOT / "monitor_sample.py"), "stream"])
+        self.assertEqual(local, [sys.executable, str(ROOT / "monitor" / "monitor_sample.py"), "stream"])
 
     def test_remote_streams_use_dedicated_batch_connections(self):
         command = collector.stream_command("u@192.0.2.1", False, "monitor_sample.py", ["stream", "--root", "/a b"])
@@ -262,7 +263,7 @@ class CollectorTests(unittest.TestCase):
             binary.mkdir()
             for name in ("cluster_status_collector.py", "cluster_config.py", "failure_events.py", "queue_eta_history.py", "monitor_sample.py", "monitor_cpu.py",
                          "monitor_mac.py", "monitor_linux.py"):
-                shutil.copy(ROOT / name, scripts / name)
+                shutil.copy(next(ROOT.glob(f"*/{name}")), scripts / name)
             (scripts / "monitor_queue_progress.sh").touch()
             (scripts / "monitor_queue_workers.sh").touch()
             fake_collect = scripts / "monitor_queue_collect.sh"
@@ -408,7 +409,7 @@ class InstallTests(unittest.TestCase):
             all_calls = (base / "calls").read_text().splitlines()
         self.assertEqual(unit, printed.stdout)
         self.assertNotIn("@REPO_DIR@", unit)
-        self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT}/cluster_status_collector.py\n", unit)
+        self.assertIn(f"ExecStart=/usr/bin/python3 {ROOT}/monitor/cluster_status_collector.py\n", unit)
         for setting in ("Restart=always", "Nice=10", "CPUQuota=20%", "MemoryMax=256M", "WantedBy=default.target"):
             self.assertIn(setting + "\n", unit)
         self.assertEqual(calls, ["--user daemon-reload", "--user enable rota-collector.service",

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # The scheduler modules are siblings when deployed on the coordinator.
 SCHEDULER = ROOT / "scheduler"
 sys.path.insert(0, str(SCHEDULER))
+sys.path.insert(1, str(ROOT / "monitor"))
 from adaptive_coordinator import allocate  # type: ignore[reportMissingImports]
 from monitor_pool_eta import Queue, Slot, forecast
 
@@ -82,7 +83,7 @@ class PoolEtaTests(unittest.TestCase):
                 done.touch()
                 os.utime(done, (now - 40, now - 40))
             report = json.loads(subprocess.check_output(
-                [sys.executable, str(ROOT / "monitor_pool_eta.py"), "--root", str(SCHEDULER),
+                [sys.executable, str(ROOT / "monitor" / "monitor_pool_eta.py"), "--root", str(SCHEDULER),
                  "--state-root", str(state), "--json"], text=True))
             for q, fixed, pool in [("A", 600, 600), ("B", 3600, 2100)]:
                 self.assertAlmostEqual(report[q]["allocation_eta_sec"], fixed, delta=3)

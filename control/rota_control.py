@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 
+sys.path.append(str(Path(__file__).resolve().parents[1] / "setup"))  # the inventory renderer
 from cluster_config import load_monitor_environment
 
 if __name__ == "__main__":

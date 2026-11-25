@@ -31,7 +31,8 @@ if [ ! -f "$HOSTS_FILE" ]; then
   exit 1
 fi
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MONITOR_DIR="$REPO_DIR/monitor"
 [ -n "$COORDINATOR" ] || { echo "Source the inventory environment or pass --coordinator." >&2; exit 2; }
 MONITOR_FILES=(
   start_monitoring.sh
@@ -61,7 +62,7 @@ MONITOR_FILES=(
 )
 
 for file in "${MONITOR_FILES[@]}"; do
-  if [ ! -f "$REPO_DIR/$file" ]; then
+  if [ ! -f "$MONITOR_DIR/$file" ]; then
     echo "Monitoring source is missing: $REPO_DIR/$file" >&2
     exit 1
   fi
@@ -162,7 +163,7 @@ REMOTE
   remote_command="ROTA_ROOT=$(printf '%q' "$ROTA_ROOT") target_kind=$(printf '%q' "$target_kind") check_only=$CHECK_ONLY bash -c $(printf '%q' "$remote_code")"
 
   if [ "$CHECK_ONLY" -eq 1 ]; then
-    if tar -cf - -C "$REPO_DIR" "${MONITOR_FILES[@]}" |
+    if tar -cf - -C "$MONITOR_DIR" "${MONITOR_FILES[@]}" |
       ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" "$remote_command"; then
       echo "CURRENT  $label"
       return 0
@@ -170,7 +171,7 @@ REMOTE
     return 1
   fi
 
-  if ! tar -cf - -C "$REPO_DIR" "${MONITOR_FILES[@]}" |
+  if ! tar -cf - -C "$MONITOR_DIR" "${MONITOR_FILES[@]}" |
     ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" "$remote_command"; then
     echo "Monitoring sync failed for $label" >&2
     return 1

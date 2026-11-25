@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "setup"))
 import cluster_config as config
 
 
@@ -75,7 +75,7 @@ class ConfigTests(unittest.TestCase):
         shared = self.root / "data"
         self.data["shared_root"] = str(shared)
         self.load(self.data)
-        command = [sys.executable, str(ROOT / "cluster_config.py"), str(self.path), "--render"]
+        command = [sys.executable, str(ROOT / "setup" / "cluster_config.py"), str(self.path), "--render"]
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("shared_root is unavailable", result.stderr)
@@ -112,7 +112,7 @@ class ConfigTests(unittest.TestCase):
         result = subprocess.check_output(
             [sys.executable, "-c", 'import cluster_config as c, os; c.load_monitor_environment(); '
              'print(os.environ["ROTA_ROOT"], os.environ["ROTA_COORDINATOR"])'],
-            cwd=ROOT, env={"XDG_CONFIG_HOME": str(settings.parent), "ROTA_ROOT": "/explicit"},
+            cwd=ROOT / "setup", env={"XDG_CONFIG_HOME": str(settings.parent), "ROTA_ROOT": "/explicit"},
             text=True)
         self.assertEqual(result.strip(), "/explicit user@storage")
 
@@ -138,7 +138,7 @@ class ConfigTests(unittest.TestCase):
     def test_dashboard_uses_inventory_labels_instead_of_site_aliases(self):
         data = self.load(self.data)
         env_file = config.render(data, self.root / "generated")
-        source = (ROOT / "start_tmux_monitoring.sh").read_text()
+        source = (ROOT / "monitor" / "start_tmux_monitoring.sh").read_text()
         match = re.search(r"^mk_label\(\) \{.*?^\}", source, re.M | re.S)
         assert match is not None
         function = match[0]
@@ -148,7 +148,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), ["storage", "worker"])
 
     def test_process_scan_recognizes_jobs_outside_volumes(self):
-        source = (ROOT / "monitor_queue_workers.sh").read_text()
+        source = (ROOT / "monitor" / "monitor_queue_workers.sh").read_text()
         scan = source.split("REMOTE_SCAN_CMD=$(cat <<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
         processes = "1 mmworker__srv_cluster_study 2\n42 Rscript job.R --job_tag _srv_cluster_job\n"
         script = "ps() { printf '%s' " + shlex.quote(processes) + "; }\n" + scan
@@ -161,7 +161,7 @@ class ConfigTests(unittest.TestCase):
         share.mkdir()
         (share / "io.sh").write_text('printf "%s\\n" "$@"\n')
         (share / "rates.py").touch()
-        source = (ROOT / "start_tmux_monitoring.sh").read_text()
+        source = (ROOT / "monitor" / "start_tmux_monitoring.sh").read_text()
         block = source.split("  printf -v root_q", 1)[1].split("  io_cols=", 1)[0]
         block = "  printf -v root_q" + block
         setup = '''set -eu

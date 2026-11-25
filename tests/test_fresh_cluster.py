@@ -40,7 +40,7 @@ raise SystemExit(subprocess.run(["bash", "-c", args[1]], env=os.environ).returnc
             config_path.write_text(json.dumps({"shared_root": str(share), "coordinator": "node",
                 "hosts": [{"id": "node", "ssh": "fixture", "cpu_units": 2,
                            "memory_mib": 2048, "enabled": True}]}))
-            env_file = subprocess.check_output([sys.executable, str(ROOT / "cluster_config.py"),
+            env_file = subprocess.check_output([sys.executable, str(ROOT / "setup" / "cluster_config.py"),
                                                 str(config_path), "--render"], text=True).strip()
             output = subprocess.check_output(["bash", "-c", 'source "$1"; env -0', "test", str(env_file)])
             env = dict(item.decode().split("=", 1) for item in output.split(b"\0") if item)

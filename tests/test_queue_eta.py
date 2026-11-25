@@ -4,6 +4,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "monitor"))
 from monitor_queue_eta import current_eta, sample_jobs, shared_eta, shard_eta
 
 

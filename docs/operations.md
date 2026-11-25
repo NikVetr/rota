@@ -13,10 +13,10 @@ allowance in MiB, and an enabled flag. An SSH target can be an alias from
 `~/.ssh/config`. Check the inventory without contacting any machines:
 
 ```bash
-python3 cluster_config.py cluster.local.json
+./rota config cluster.local.json
 ```
 
-Run `./doctor cluster.local.json` on the coordinator before deployment, or if
+Run `./rota doctor cluster.local.json` on the coordinator before deployment, or if
 a worker loses access. Two machines can each have a writable directory with
 the right name and still be looking at different disks. To check, the doctor
 writes a random marker on the coordinator and reads it on each host. It also
@@ -128,7 +128,7 @@ unavailable, running rows fall back to the current-allocation estimate.
 
 The status collector saves each numeric ETA it observes. To compare the
 first forecast in each quarter of a queue's progress with its completion time,
-run `python3 queue_eta_history.py` on the collector host. Use `--all` for every
+run `python3 monitor/queue_eta_history.py` on the collector host. Use `--all` for every
 forecast, `--queue <label-or-id>` to filter, or `--json` for timestamps and
 errors in seconds. A positive error means the queue finished later than forecast. Only queues
 that finish successfully receive a score. The history includes worker counts and timing warnings from
@@ -143,7 +143,7 @@ python3 "$ROTA_ROOT/monitor_pool_eta.py" --root "$ROTA_ROOT" --json
 
 `pool_eta_sec` includes capacity released by other queues.
 `allocation_eta_sec` keeps each queue at its current worker count.
-For a one-off monitor view of the latter, use `monitor_queue_progress.sh
+For a one-off monitor view of the latter, use `monitor/monitor_queue_progress.sh
 --eta_mode allocation`. Fixed-worker queues and host-local shards retain
 their own estimates.
 
