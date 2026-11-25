@@ -38,16 +38,18 @@ Chapters cover the cluster, the pool, submitting a queue, budgets, deciding who 
 ## When to use ROTA
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "20px"}, "flowchart": {"nodeSpacing": 30, "rankSpacing": 35, "wrappingWidth": 300}}}%%
+%%{init: {"themeVariables": {"fontSize": "20px"}, "flowchart": {"nodeSpacing": 30, "rankSpacing": 30, "wrappingWidth": 300}}}%%
 flowchart TD
-    users{{Many users needing isolation,<br/>MPI jobs, or dozens of hosts?}} -- yes --> slurm[Slurm, Flux<br/>or HTCondor]
-    users -- no --> stack{{Containers, the cloud,<br/>or a Python task graph?}}
-    stack -- yes --> k8s[Kubernetes,<br/>Ray or Dask]
-    stack -- no --> list{{A one-off command list,<br/>or no shared drive?}}
-    list -- yes --> parallel[GNU Parallel<br/>or HTCondor]
-    list -- no --> rota[ROTA]
-    %% Invisible links keep the answers in one column beside the questions.
-    slurm ~~~ k8s ~~~ parallel
+    users{{Many users needing isolation,<br/>MPI jobs, or dozens of hosts?}} --- y1([yes]) --> slurm[Slurm, Flux<br/>or HTCondor]
+    users --- n1([no]) --> stack{{Containers, the cloud,<br/>or a Python task graph?}}
+    stack --- y2([yes]) --> k8s[Kubernetes,<br/>Ray or Dask]
+    stack --- n2([no]) --> list{{A one-off command list,<br/>or no shared drive?}}
+    list --- y3([yes]) --> parallel[GNU Parallel<br/>or HTCondor]
+    list --- n3([no]) --> rota[ROTA]
+    classDef yes fill:#dafbe1,stroke:#1a7f37,color:#116329,stroke-width:2px
+    classDef no fill:#ffebe9,stroke:#cf222e,color:#a40e26,stroke-width:2px
+    class y1,y2,y3 yes
+    class n1,n2,n3 no
 ```
 
 [How it compares](docs/comparison.md) explains each branch in more detail.
