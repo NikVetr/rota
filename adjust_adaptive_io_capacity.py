@@ -49,11 +49,9 @@ def validate(root: Path, pool_id: str, previous: int, capacity: int) -> dict[str
         raise RuntimeError("positive capacities and matching previous allowance are required")
     if not pool["io_pressure_host"] or int(pool["smbd_cpu_limit_pct"]) < 1:
         raise RuntimeError("a configured SMB pressure guard is required")
-    # A pool started before the host daemon's rename records it as agent/mmadaptiveagent.sh.
-    daemon = ("daemon", "mmhostdaemon.sh") if "daemon_sha256" in pool else ("agent", "mmadaptiveagent.sh")
     paths = {"resources": Path(pool["resources_file"]), **{
         key: root / name for key, name in {
-            daemon[0]: daemon[1], "worker": "mmworker.sh",
+            "daemon": "mmhostdaemon.sh", "worker": "mmworker.sh",
             "claim": "adaptive_claim.py", "memory": "adaptive_memory.py",
             "calibration": "adaptive_calibration.py", "recovery": "adaptive_recovery.py",
             "coordinator": "adaptive_coordinator.py",

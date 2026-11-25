@@ -474,7 +474,7 @@ for attempt in \$(seq 1 '$READY_TIMEOUT'); do
      grep -Fqx \"script=\$state_dir/bin/mmhostdaemon.sh\" \"\$state_dir/daemon.lock\" &&
      grep -Fqx \"state_dir=\$state_dir\" \"\$state_dir/daemon.lock\" &&
      kill -0 \"\$pid\" 2>/dev/null && [ -f \"\$state_dir/status.tsv\" ] &&
-     awk -F '\t' -v pool='$POOL_ID' -v host='$host_id' '\$1 == \"agent\" && \$2 == pool && \$3 == host {ok=1} END {exit !ok}' \"\$state_dir/status.tsv\"; then
+     awk -F '\t' -v pool='$POOL_ID' -v host='$host_id' '\$1 == \"daemon\" && \$2 == pool && \$3 == host {ok=1} END {exit !ok}' \"\$state_dir/status.tsv\"; then
     echo READY
     exit 0
   fi
@@ -1155,7 +1155,7 @@ command=\$(ps -ww -p \"\$pid\" -o command= 2>/dev/null)
 [[ \" \$command \" == *\" \$script \"* ]]
 [[ \" \$command \" == *\" --state-dir \$state_dir \"* ]]
 awk -F '\t' -v pool='$POOL_ID' -v host='$host_id' '
-  \$1 == \"agent\" && \$2 == pool && \$3 == host && \$5 ~ /^(enabled|drain-only)\$/ {daemon++}
+  \$1 == \"daemon\" && \$2 == pool && \$3 == host && \$5 ~ /^(enabled|drain-only)\$/ {daemon++}
   \$1 == \"reservation\" {reservations++}
   END {exit !(daemon == 1 && reservations == 0)}
 ' \"\$state_dir/status.tsv\"

@@ -1220,7 +1220,7 @@ def _parse_status(
         columns = line.split("\t")
         if len(columns) != STATUS_COLUMNS or columns[1] != pool_id or columns[2] != host_id:
             raise SnapshotError(f"invalid status row from {host_id}")
-        if columns[0] == "agent":  # the daemon's own row keeps its historical record type
+        if columns[0] == "daemon":
             if daemon is not None:
                 raise SnapshotError(f"duplicate daemon status from {host_id}")
             daemon = columns

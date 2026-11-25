@@ -274,7 +274,8 @@ def read_hosts(root, pool, ready, now, lease):
             continue
         if not rows or any(r["pool_id"] != pool["pool_id"] or r["host_id"] != name for r in rows):
             continue
-        daemon = next((r for r in rows if r["record_type"] == "agent"), None)
+        # "agent": the daemon row's record type in pools started before its rename.
+        daemon = next((r for r in rows if r["record_type"] in ("daemon", "agent")), None)
         if daemon is None:
             continue
         for r in rows:

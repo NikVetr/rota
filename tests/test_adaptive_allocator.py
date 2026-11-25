@@ -1438,7 +1438,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         sample_epoch: int | None = None, smb_bytes: int = -1, owner_state: str = "off",
     ) -> None:
         daemon = [
-            "agent", self.pool_id, "host-1", str(generation), admission,
+            "daemon", self.pool_id, "host-1", str(generation), admission,
             "", "", "", "", "", "", "", "", "ready", str(live_cpu),
             str(live_memory), str(smbd_cpu_tenths), telemetry_state,
             str(int(time.time()) if sample_epoch is None else sample_epoch), str(smb_bytes),
@@ -2099,7 +2099,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             if not path.exists():
                 return False
             rows = path.read_text(encoding="utf-8").splitlines()
-            daemon_rows = [row.split("\t") for row in rows if row.startswith("agent\t")]
+            daemon_rows = [row.split("\t") for row in rows if row.startswith("daemon\t")]
             return (
                 len(daemon_rows) == 1 and int(daemon_rows[0][3]) == generation
                 and sum(row.startswith("reservation\t") for row in rows) == reservations
@@ -2904,7 +2904,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.env_value(lease, "generation"), "1")
         (self.remote_state / "status.tsv").write_text(
             STATUS_HEADER + "\n" + "\t".join([
-                "agent", self.pool_id, "host-1", "1", "drain-only",
+                "daemon", self.pool_id, "host-1", "1", "drain-only",
                 "", "", "", "", "", "", "", "", "uncertain_reservation",
                 "2", "2048", "0", "ok", str(int(time.time())), "-1",
                 "", "", "off", "-1",
@@ -2941,7 +2941,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
         )
         (self.remote_state / "status.tsv").write_text(
             STATUS_HEADER + "\n" + "\t".join([
-                "agent", self.pool_id, "host-1", "1", "enabled",
+                "daemon", self.pool_id, "host-1", "1", "enabled",
                 "", "", "", "", "", "", "", "", "ready", "2", "2048",
                 "0", "ok", str(int(time.time())), "-1",
                 "", "", "off", "-1",
@@ -2964,7 +2964,7 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             self.assertEqual(certain["reservation_memory_mib"], {self.queue_id: 512})
             (self.remote_state / "status.tsv").write_text(
                 STATUS_HEADER + "\n" + "\t".join([
-                    "agent", self.pool_id, "host-1", "1", "drain-only",
+                    "daemon", self.pool_id, "host-1", "1", "drain-only",
                     "", "", "", "", "", "", "", "",
                     "uncertain_reservation", "2", "2048", "0", "ok", str(int(time.time())), "-1",
                     "", "", "off", "-1",

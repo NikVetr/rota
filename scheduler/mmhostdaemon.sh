@@ -1019,8 +1019,7 @@ publish_status() {
   local file calibration_report
   temporary="${status_file}.tmp.$$.$RANDOM"
   printf 'record_type\tpool_id\thost_id\tgeneration\tadmission\treservation_id\tqueue_id\tstate\tpid\tcpu_units\tmemory_mib\tobserved_memory_mib\tcharged_memory_mib\tmessage\tlive_cpu_units\tlive_memory_mib\tsmbd_cpu_tenths\ttelemetry_state\tresource_sample_epoch\tsmb_bytes\tcurrent_memory_mib\tsustained_memory_mib\towner_state\towner_idle_seconds\n' > "$temporary" || return 1
-  # The row's record type stays `agent`: Agent Bar and the pool ETA parse it.
-  printf 'agent\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t%s\t%s\n' \
+  printf 'daemon\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t%s\t%s\n' \
     "$pool_id" "$host_id" "$accepted_generation" "$admission" "$plan_message" \
     "$live_cpu_units" "$live_memory_mib" "$smbd_cpu_tenths" "$telemetry_state" "$resource_sample_epoch" \
     "$smb_bytes" "$owner_state" "${owner_idle:--1}" >> "$temporary" || return 1
